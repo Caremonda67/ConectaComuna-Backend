@@ -4,7 +4,7 @@
 -- Aplicar en Supabase: copiar el contenido de frontend/supabase/schema.sql en la consola SQL.
 
 -- ---------- PERFILES DE USUARIO ----------
-create type account_type as enum ('client', 'business');
+create type account_type as enum ('client', 'business', 'facilitador');
 
 create table public.profiles (
   id uuid primary key references auth.users on delete cascade,
@@ -184,3 +184,61 @@ create policy business_photos_insert on storage.objects
 
 create policy business_photos_read on storage.objects
   for select using (bucket_id = 'business-photos');
+
+-- Añadir el rol 'facilitador'
+ALTER TYPE account_type ADD VALUE IF NOT EXISTS 'facilitador';
+
+-- ---------- FACILITADORES (CO-ADMINISTRADORES) ----------
+create table public.facilitadores_negocio (
+  id uuid primary key default gen_random_uuid(),
+  negocio_id uuid not null references public.businesses(id) on delete cascade,
+  facilitador_id uuid not null references public.profiles(id) on delete cascade,
+  estado_vinculacion text not null default 'pendiente' check (estado_vinculacion in ('pendiente', 'aprobado', 'rechazado')),
+  creado_en timestamptz not null default now(),
+  constraint un_solo_facilitador_por_negocio unique(negocio_id, facilitador_id)
+);
+
+alter table public.facilitadores_negocio enable row level security;
+
+-- Los facilitadores pueden ver sus propias vinculaciones
+create policy facilitadores_select_propios on public.facilitadores_negocio
+  for select using (auth.uid() = facilitador_id);
+
+-- Los dueños de negocios pueden ver las vinculaciones hacia sus negocios
+create policy facilitadores_select_dueños on public.facilitadores_negocio
+  for select using (auth.uid() = (select owner_id from public.businesses b where b.id = negocio_id));
+
+-- Los facilitadores pueden solicitar vinculación (insertar en pendiente)
+create policy facilitadores_insert_solicitud on public.facilitadores_negocio
+  for insert with check (auth.uid() = facilitador_id and estado_vinculacion = 'pendiente');
+
+-- Solo el dueño del negocio puede actualizar el estado (aprobar o rechazar)
+create policy facilitadores_update_dueño on public.facilitadores_negocio
+  for update using (auth.uid() = (select owner_id from public.businesses b where b.id = negocio_id));
+
+-- Los dueños de negocios pueden eliminar una vinculación
+create policy facilitadores_delete_dueño on public.facilitadores_negocio
+  for delete using (auth.uid() = (select owner_id from public.businesses b where b.id = negocio_id));
+
+-- Actualizar política de UPDATE de businesses para permitir a los facilitadores aprobados
+create policy businesses_facilitator_update on public.businesses
+  for update using (
+    exists (
+      select 1 from public.facilitadores_negocio fn
+      where fn.negocio_id = id
+      and fn.facilitador_id = auth.uid()
+      and fn.estado_vinculacion = 'aprobado'
+    )
+  ) with check (
+    exists (
+      select 1 from public.facilitadores_negocio fn
+      where fn.negocio_id = id
+      and fn.facilitador_id = auth.uid()
+      and fn.estado_vinculacion = 'aprobado'
+    )
+  );
+
+-- NOTA: La política original 'businesses_owner_write' permitía 'for all'. 
+-- Deberíamos asegurar que DELETE sigue siendo solo para el owner.
+-- Supabase acumula las políticas con OR. Como la del facilitador es solo FOR UPDATE,
+-- el DELETE seguirá bloqueado para el facilitador por omisión.
