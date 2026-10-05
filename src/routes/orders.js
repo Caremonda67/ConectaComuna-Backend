@@ -9,7 +9,18 @@ ruta.post("/", async (req, res) => {
   const { usuario, account_type, error: authError } = await usuarioDesdePeticion(req);
   if (authError) return res.status(401).json({ error: authError });
 
-  const { business_id, title, description, scheduled_for, price_estimate } = req.body;
+  const {
+    business_id,
+    title,
+    description,
+    scheduled_for,
+    price_estimate,
+    final_price,
+    advance_payment,
+    service_location_type,
+    delivery_address,
+    photos,
+  } = req.body;
 
   if (!business_id || !title) {
     return res.status(400).json({ error: "business_id y title son requeridos" });
@@ -35,6 +46,11 @@ ruta.post("/", async (req, res) => {
       description: description ?? '',
       scheduled_for: scheduled_for ?? null,
       price_estimate: price_estimate ?? null,
+      final_price: final_price ?? null,
+      advance_payment: advance_payment ?? 0,
+      service_location_type: service_location_type ?? 'workshop',
+      delivery_address: delivery_address ?? null,
+      photos: Array.isArray(photos) ? photos : [],
       status: 'pending'
     })
     .select()
@@ -96,9 +112,18 @@ ruta.patch("/:id/status", async (req, res) => {
     return res.status(403).json({ error: "El cliente solo puede cancelar el pedido" });
   }
 
+  const updatePayload = {
+    status,
+    updated_at: new Date().toISOString(),
+  };
+  if (req.body.final_price !== undefined) updatePayload.final_price = req.body.final_price;
+  if (req.body.advance_payment !== undefined) updatePayload.advance_payment = req.body.advance_payment;
+  if (req.body.business_notes !== undefined) updatePayload.business_notes = req.body.business_notes;
+  if (req.body.cancellation_reason !== undefined) updatePayload.cancellation_reason = req.body.cancellation_reason;
+
   const { data, error } = await claveSupabase
     .from("orders")
-    .update({ status, updated_at: new Date().toISOString() })
+    .update(updatePayload)
     .eq("id", req.params.id)
     .select()
     .single();

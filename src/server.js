@@ -7,6 +7,7 @@ import rutasAuth from "./routes/auth.js";
 import rutasBusinesses from "./routes/businesses.js";
 import rutasOrders from "./routes/orders.js";
 import rutasReviews from "./routes/reviews.js";
+import rutasReports from "./routes/reports.js";
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use("/api/auth", rutasAuth);
 app.use("/api/businesses", rutasBusinesses);
 app.use("/api/orders", rutasOrders);
 app.use("/api/reviews", rutasReviews);
+app.use("/api/reports", rutasReports);
 
 const puerto = process.env.PORT || 4000;
 
