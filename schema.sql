@@ -92,6 +92,13 @@ create table public.orders (
   status order_status not null default 'pending',
   scheduled_for timestamptz,
   price_estimate numeric(12,2),
+  final_price numeric(12,2),
+  advance_payment numeric(12,2) default 0,
+  service_location_type text default 'workshop',
+  delivery_address text,
+  business_notes text,
+  cancellation_reason text,
+  photos text[] not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -184,6 +191,15 @@ create policy business_photos_insert on storage.objects
 
 create policy business_photos_read on storage.objects
   for select using (bucket_id = 'business-photos');
+
+create policy order_photos_insert on storage.objects
+  for insert to authenticated with check (
+    bucket_id = 'order-photos'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+create policy order_photos_read on storage.objects
+  for select using (bucket_id = 'order-photos');
 
 -- Añadir el rol 'facilitador'
 ALTER TYPE account_type ADD VALUE IF NOT EXISTS 'facilitador';
