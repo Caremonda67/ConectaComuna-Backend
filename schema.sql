@@ -262,3 +262,28 @@ create policy businesses_facilitator_update on public.businesses
 -- Deberíamos asegurar que DELETE sigue siendo solo para el owner.
 -- Supabase acumula las políticas con OR. Como la del facilitador es solo FOR UPDATE,
 -- el DELETE seguirá bloqueado para el facilitador por omisión.
+
+-- ---------- REPORTES COMUNITARIOS ----------
+create table if not exists public.reportes_comunitarios (
+  id uuid primary key default gen_random_uuid(),
+  negocio_id uuid not null references public.businesses(id) on delete cascade,
+  reportado_por_id uuid not null references public.profiles(id) on delete cascade,
+  motivo text not null check (motivo in ('direccion_falsa', 'anticipo_incumplido', 'precios_enganosos', 'suplantacion', 'otro')),
+  descripcion text,
+  estado text not null default 'pendiente' check (estado in ('pendiente', 'revisado', 'descartado')),
+  moderado_por_id uuid references public.profiles(id) on delete set null,
+  notas_moderacion text,
+  creado_en timestamptz not null default now(),
+  actualizado_en timestamptz not null default now()
+);
+
+alter table public.reportes_comunitarios enable row level security;
+
+create policy reportes_insert_auth on public.reportes_comunitarios
+  for insert with check (auth.uid() = reportado_por_id);
+
+create policy reportes_select_auth on public.reportes_comunitarios
+  for select using (auth.role() = 'authenticated');
+
+create policy reportes_update_auth on public.reportes_comunitarios
+  for update using (auth.role() = 'authenticated');
