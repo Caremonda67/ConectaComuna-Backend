@@ -92,6 +92,12 @@ create table public.orders (
   status order_status not null default 'pending',
   scheduled_for timestamptz,
   price_estimate numeric(12,2),
+  final_price numeric(12,2),
+  advance_payment numeric(12,2) default 0,
+  service_location_type text default 'workshop',
+  delivery_address text,
+  business_notes text,
+  cancellation_reason text,
   photos text[] not null default '{}',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
