@@ -16,18 +16,24 @@ const COLUMNS = [
   "lng",
   "photos",
   "hours",
-  "is_active"
+  "is_active",
+  "wholesale_enabled",
+  "wholesale_min_order",
+  "wholesale_terms",
+  "services_catalog",
+  "verification_status"
 ];
 
 // Listado público con filtros
 ruta.get("/", async (req, res) => {
   let query = claveSupabase
     .from("businesses")
-    .select("id, name, description, category, neighborhood, photos, lat, lng, rating_avg, rating_count, is_active")
+    .select("id, name, description, category, neighborhood, photos, lat, lng, rating_avg, rating_count, is_active, wholesale_enabled, wholesale_min_order, wholesale_terms, services_catalog, verification_status")
     .eq("is_active", true);
 
-  const { category, q } = req.query;
+  const { category, q, wholesale, mayor } = req.query;
   if (category && category !== "all") query = query.eq("category", category);
+  if (wholesale === "true" || mayor === "1") query = query.eq("wholesale_enabled", true);
   if (q && q.trim()) {
     query = query.or(`name.ilike.%${q.trim()}%,neighborhood.ilike.%${q.trim()}%`);
   }
@@ -77,6 +83,10 @@ ruta.post("/", async (req, res) => {
     lng: req.body.lng,
     photos: req.body.photos ?? [],
     hours: req.body.hours ?? [],
+    wholesale_enabled: Boolean(req.body.wholesale_enabled),
+    wholesale_min_order: req.body.wholesale_min_order ?? null,
+    wholesale_terms: req.body.wholesale_terms ?? null,
+    services_catalog: req.body.services_catalog ?? [],
   };
 
   if (!campos.name || !campos.category || campos.lat == null || campos.lng == null) {
