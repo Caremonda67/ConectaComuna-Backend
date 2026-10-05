@@ -116,7 +116,20 @@ ruta.patch("/:id", async (req, res) => {
 
   if (!existente) return res.status(404).json({ error: "Negocio no encontrado" });
 
-  if (existente.owner_id !== usuario.id) {
+  let autorizado = existente.owner_id === usuario.id;
+  if (!autorizado) {
+    const { data: vinculo } = await claveSupabase
+      .from("facilitador_negocios")
+      .select("id")
+      .eq("business_id", req.params.id)
+      .eq("facilitador_id", usuario.id)
+      .eq("estado", "aprobado")
+      .maybeSingle();
+
+    if (vinculo) autorizado = true;
+  }
+
+  if (!autorizado) {
     return res.status(403).json({ error: "No tienes permiso para editar este negocio" });
   }
 

@@ -282,8 +282,21 @@ alter table public.reportes_comunitarios enable row level security;
 create policy reportes_insert_auth on public.reportes_comunitarios
   for insert with check (auth.uid() = reportado_por_id);
 
-create policy reportes_select_auth on public.reportes_comunitarios
-  for select using (auth.role() = 'authenticated');
+create policy reportes_select_facilitador on public.reportes_comunitarios
+  for select using (
+    auth.uid() = reportado_por_id
+    or exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid()
+        and profiles.account_type = 'facilitador'
+    )
+  );
 
-create policy reportes_update_auth on public.reportes_comunitarios
-  for update using (auth.role() = 'authenticated');
+create policy reportes_update_facilitador on public.reportes_comunitarios
+  for update using (
+    exists (
+      select 1 from public.profiles
+      where profiles.id = auth.uid()
+        and profiles.account_type = 'facilitador'
+    )
+  );
