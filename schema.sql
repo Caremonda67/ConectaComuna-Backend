@@ -67,6 +67,7 @@ create table public.businesses (
   wholesale_enabled boolean not null default false,
   wholesale_min_order text,
   wholesale_terms text,
+  services_catalog jsonb not null default '[]',
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
