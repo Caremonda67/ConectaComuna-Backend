@@ -4,7 +4,7 @@ import { usuarioDesdePeticion } from "../config/auth.js";
 
 const ruta = Router();
 
-const ACCOUNT_TYPES = ["client", "business"];
+const ACCOUNT_TYPES = ["client", "business", "facilitador"];
 
 // Registro: crea el usuario en Supabase Auth y delega la creación del perfil al trigger.
 ruta.post("/registro", async (req, res) => {
