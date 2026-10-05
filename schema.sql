@@ -64,6 +64,9 @@ create table public.businesses (
   verification_status text not null default 'unverified' check (verification_status in ('unverified', 'pending_review', 'verified', 'rejected')),
   verification_score numeric(3,2),
   verification_selfie_url text,
+  wholesale_enabled boolean not null default false,
+  wholesale_min_order text,
+  wholesale_terms text,
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
