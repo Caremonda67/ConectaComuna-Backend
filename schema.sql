@@ -13,20 +13,22 @@ create table public.profiles (
   avatar_url text,
   account_type account_type not null default 'client',
   neighborhood text,
+  onboarding_completado boolean not null default false,
   created_at timestamptz not null default now()
 );
 
 -- Trigger: al crear usuario en Auth, siembra su fila en profiles automáticamente.
-create function public.handle_new_user() returns trigger
+create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.profiles (id, full_name, phone, neighborhood, account_type)
+  insert into public.profiles (id, full_name, phone, neighborhood, account_type, onboarding_completado)
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'full_name', 'Vecino'),
     new.raw_user_meta_data->>'phone',
     new.raw_user_meta_data->>'neighborhood',
-    coalesce((new.raw_user_meta_data->>'account_type')::account_type, 'client')
+    coalesce((new.raw_user_meta_data->>'account_type')::account_type, 'client'),
+    coalesce((new.raw_user_meta_data->>'onboarding_completado')::boolean, false)
   );
   return new;
 end $$;
@@ -68,6 +70,7 @@ create table public.businesses (
   wholesale_min_order text,
   wholesale_terms text,
   services_catalog jsonb not null default '[]',
+  codigo_apadrinamiento varchar(6),
   is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
