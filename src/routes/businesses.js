@@ -34,9 +34,17 @@ ruta.get("/", async (req, res) => {
   if (category && category !== "all") query = query.eq("category", category);
   if (wholesale === "true" || mayor === "1") query = query.eq("wholesale_enabled", true);
   if (q && q.trim()) {
-    const safeQ = q.trim().replace(/[,()%"'\\]/g, "");
-    if (safeQ) {
-      query = query.or(`name.ilike.%${safeQ}%,neighborhood.ilike.%${safeQ}%`);
+    const tokens = q
+      .replace(/[,()%"'\\]/g, " ")
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+
+    if (tokens.length > 0) {
+      const orConditions = tokens
+        .flatMap((t) => [`name.ilike.%${t}%`, `description.ilike.%${t}%`, `neighborhood.ilike.%${t}%`])
+        .join(",");
+      query = query.or(orConditions);
     }
   }
 
@@ -49,6 +57,11 @@ ruta.get("/", async (req, res) => {
 ruta.get("/:id", async (req, res) => {
   const { id } = req.params;
 
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  if (!isUuid) {
+    return res.status(404).json({ error: "Negocio no encontrado" });
+  }
+
   const { data: business, error } = await claveSupabase
     .from("businesses")
     .select(
@@ -57,7 +70,12 @@ ruta.get("/:id", async (req, res) => {
     .eq("id", id)
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    if (error.code === "22P02" || error.code === "PGRST116") {
+      return res.status(404).json({ error: "Negocio no encontrado" });
+    }
+    return res.status(500).json({ error: error.message });
+  }
   if (!business) return res.status(404).json({ error: "Negocio no encontrado" });
 
   res.json(business);
