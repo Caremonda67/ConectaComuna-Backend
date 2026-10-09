@@ -11,11 +11,13 @@ export async function usuarioDesdePeticion(req) {
   const { data, error } = await claveSupabase.auth.getUser(token);
   if (error || !data?.user) return { error: "Token inválido o expirado" };
 
-  const { data: fila } = await claveSupabase
+  const { data: fila, error: profileError } = await claveSupabase
     .from("profiles")
     .select("account_type, full_name")
     .eq("id", data.user.id)
     .maybeSingle();
+
+  if (profileError) return { error: "Error al consultar perfil de usuario: " + profileError.message };
 
   return {
     usuario: data.user,

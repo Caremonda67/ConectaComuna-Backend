@@ -26,15 +26,26 @@ ruta.post("/", async (req, res) => {
     return res.status(400).json({ error: "business_id y title son requeridos" });
   }
 
-  const { data: business } = await claveSupabase
+  const { data: business, error: bizError } = await claveSupabase
     .from("businesses")
     .select("owner_id")
     .eq("id", business_id)
-    .single();
+    .maybeSingle();
 
+  if (bizError) return res.status(500).json({ error: bizError.message });
   if (!business) return res.status(404).json({ error: "Negocio no encontrado" });
   if (business.owner_id === usuario.id) {
     return res.status(403).json({ error: "No puedes hacer un pedido a tu propio negocio" });
+  }
+
+  // Regla Trato Seguro Comunal: el anticipo no puede superar el 50%
+  const anticipo = advance_payment != null ? Number(advance_payment) : 0;
+  if (anticipo < 0) {
+    return res.status(400).json({ error: "El anticipo no puede ser negativo" });
+  }
+  const basePrecio = final_price != null ? Number(final_price) : (price_estimate != null ? Number(price_estimate) : null);
+  if (basePrecio && anticipo > Math.floor(basePrecio * 0.5)) {
+    return res.status(400).json({ error: "El anticipo no puede superar el 50% del valor pactado (Trato Seguro)" });
   }
 
   const { data, error } = await claveSupabase
@@ -47,7 +58,7 @@ ruta.post("/", async (req, res) => {
       scheduled_for: scheduled_for ?? null,
       price_estimate: price_estimate ?? null,
       final_price: final_price ?? null,
-      advance_payment: advance_payment ?? 0,
+      advance_payment: anticipo,
       service_location_type: service_location_type ?? 'workshop',
       delivery_address: delivery_address ?? null,
       photos: Array.isArray(photos) ? photos : [],
@@ -69,7 +80,13 @@ ruta.get("/", async (req, res) => {
 
   if (account_type === 'business') {
     // Buscar el negocio del usuario actual
-    const { data: myBusiness } = await claveSupabase.from("businesses").select("id").eq("owner_id", usuario.id).single();
+    const { data: myBusiness, error: myBizErr } = await claveSupabase
+      .from("businesses")
+      .select("id")
+      .eq("owner_id", usuario.id)
+      .maybeSingle();
+
+    if (myBizErr) return res.status(500).json({ error: myBizErr.message });
     if (!myBusiness) return res.json([]);
     query = query.eq("business_id", myBusiness.id);
   } else {
@@ -92,12 +109,13 @@ ruta.patch("/:id/status", async (req, res) => {
     return res.status(400).json({ error: "Estado inválido" });
   }
 
-  const { data: order } = await claveSupabase
+  const { data: order, error: orderErr } = await claveSupabase
     .from("orders")
-    .select("client_id, business:business_id(owner_id)")
+    .select("client_id, final_price, price_estimate, business:business_id(owner_id)")
     .eq("id", req.params.id)
-    .single();
+    .maybeSingle();
 
+  if (orderErr) return res.status(500).json({ error: orderErr.message });
   if (!order) return res.status(404).json({ error: "Pedido no encontrado" });
 
   const isClient = order.client_id === usuario.id;
@@ -117,7 +135,17 @@ ruta.patch("/:id/status", async (req, res) => {
     updated_at: new Date().toISOString(),
   };
   if (req.body.final_price !== undefined) updatePayload.final_price = req.body.final_price;
-  if (req.body.advance_payment !== undefined) updatePayload.advance_payment = req.body.advance_payment;
+  if (req.body.advance_payment !== undefined) {
+    const adv = Number(req.body.advance_payment);
+    if (adv < 0) {
+      return res.status(400).json({ error: "El anticipo no puede ser negativo" });
+    }
+    const precioReferencia = req.body.final_price !== undefined ? Number(req.body.final_price) : Number(order.final_price ?? order.price_estimate ?? 0);
+    if (precioReferencia > 0 && adv > Math.floor(precioReferencia * 0.5)) {
+      return res.status(400).json({ error: "El anticipo no puede superar el 50% del precio pactado (Trato Seguro)" });
+    }
+    updatePayload.advance_payment = adv;
+  }
   if (req.body.business_notes !== undefined) updatePayload.business_notes = req.body.business_notes;
   if (req.body.cancellation_reason !== undefined) updatePayload.cancellation_reason = req.body.cancellation_reason;
 

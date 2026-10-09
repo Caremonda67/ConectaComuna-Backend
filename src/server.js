@@ -9,9 +9,31 @@ import rutasOrders from "./routes/orders.js";
 import rutasReviews from "./routes/reviews.js";
 import rutasReports from "./routes/reports.js";
 
-const app = express();
+const origenesConfigurados = (process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((u) => u.trim().replace(/\/$/, ""))
+  .filter(Boolean);
 
-app.use(cors());
+const origenesPermitidos = new Set([
+  ...origenesConfigurados,
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+]);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Peticiones sin origin (como apps móviles, curl o pruebas locales)
+      if (!origin) return callback(null, true);
+      const origenLimpio = origin.replace(/\/$/, "");
+      if (origenesPermitidos.has(origenLimpio)) {
+        return callback(null, true);
+      }
+      return callback(new Error("Origen no permitido por política CORS"));
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 app.use("/api", rutasSalud);
