@@ -104,7 +104,13 @@ create table public.orders (
   cancellation_reason text,
   photos text[] not null default '{}',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint check_advance_max_50 check (
+    advance_payment is null or advance_payment <= 0
+    or (final_price is not null and advance_payment <= round(final_price * 0.5, 2))
+    or (final_price is null and price_estimate is not null and advance_payment <= round(price_estimate * 0.5, 2))
+    or (final_price is null and price_estimate is null)
+  )
 );
 
 alter table public.orders enable row level security;
@@ -183,6 +189,58 @@ end $$;
 create trigger orders_after_update
 after update on public.orders
 for each row execute function public.bump_completed_orders();
+
+-- Trigger: evita que un usuario altere directamente la verificación o reputación de su negocio
+create or replace function public.protect_business_columns()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if pg_trigger_depth() > 1 then
+    return new;
+  end if;
+
+  if auth.role() in ('authenticated', 'anon') then
+    if new.verification_status is distinct from old.verification_status or
+       new.verification_score is distinct from old.verification_score or
+       new.verification_selfie_url is distinct from old.verification_selfie_url then
+      raise exception 'No está permitido modificar el estado de verificación directamente';
+    end if;
+
+    if new.rating_avg is distinct from old.rating_avg or
+       new.rating_count is distinct from old.rating_count or
+       new.completed_orders is distinct from old.completed_orders then
+      raise exception 'La reputación y los pedidos completados solo se calculan automáticamente por el sistema';
+    end if;
+  end if;
+
+  return new;
+end $$;
+
+drop trigger if exists businesses_protect_columns on public.businesses;
+create trigger businesses_protect_columns
+  before update on public.businesses
+  for each row execute function public.protect_business_columns();
+
+-- Trigger: al insertar un negocio, asegurar que los valores de reputación inicien limpios
+create or replace function public.sanitize_new_business()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.role() in ('authenticated', 'anon') then
+    new.verification_status := 'unverified';
+    new.verification_score := null;
+    new.verification_selfie_url := null;
+    new.rating_avg := 0;
+    new.rating_count := 0;
+    new.completed_orders := 0;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists businesses_sanitize_insert on public.businesses;
+create trigger businesses_sanitize_insert
+  before insert on public.businesses
+  for each row execute function public.sanitize_new_business();
 
 -- ---------- STORAGE ----------
 insert into storage.buckets (id, name, public) values ('business-photos', 'business-photos', true);

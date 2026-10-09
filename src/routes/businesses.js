@@ -20,8 +20,7 @@ const COLUMNS = [
   "wholesale_enabled",
   "wholesale_min_order",
   "wholesale_terms",
-  "services_catalog",
-  "verification_status"
+  "services_catalog"
 ];
 
 // Listado público con filtros
@@ -35,7 +34,10 @@ ruta.get("/", async (req, res) => {
   if (category && category !== "all") query = query.eq("category", category);
   if (wholesale === "true" || mayor === "1") query = query.eq("wholesale_enabled", true);
   if (q && q.trim()) {
-    query = query.or(`name.ilike.%${q.trim()}%,neighborhood.ilike.%${q.trim()}%`);
+    const safeQ = q.trim().replace(/[,()%"'\\]/g, "");
+    if (safeQ) {
+      query = query.or(`name.ilike.%${safeQ}%,neighborhood.ilike.%${safeQ}%`);
+    }
   }
 
   const { data, error } = await query.order("name");
@@ -108,24 +110,30 @@ ruta.patch("/:id", async (req, res) => {
   const { usuario, error } = await usuarioDesdePeticion(req);
   if (error) return res.status(401).json({ error });
 
-  const { data: existente } = await claveSupabase
+  const { data: existente, error: errExistente } = await claveSupabase
     .from("businesses")
     .select("owner_id")
     .eq("id", req.params.id)
     .single();
 
+  if (errExistente && errExistente.code !== 'PGRST116') {
+    return res.status(500).json({ error: errExistente.message });
+  }
   if (!existente) return res.status(404).json({ error: "Negocio no encontrado" });
 
   let autorizado = existente.owner_id === usuario.id;
   if (!autorizado) {
-    const { data: vinculo } = await claveSupabase
-      .from("facilitador_negocios")
+    const { data: vinculo, error: errVinculo } = await claveSupabase
+      .from("facilitadores_negocio")
       .select("id")
-      .eq("business_id", req.params.id)
+      .eq("negocio_id", req.params.id)
       .eq("facilitador_id", usuario.id)
-      .eq("estado", "aprobado")
+      .eq("estado_vinculacion", "aprobado")
       .maybeSingle();
 
+    if (errVinculo) {
+      return res.status(500).json({ error: "Error comprobando permisos de facilitador" });
+    }
     if (vinculo) autorizado = true;
   }
 

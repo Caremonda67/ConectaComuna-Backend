@@ -21,15 +21,16 @@ ruta.post("/", async (req, res) => {
 
   // Como usamos service_role_key, debemos validar la regla manualmente:
   // La orden debe existir, pertenecer al cliente, ser para este negocio y estar completada.
-  const { data: order } = await claveSupabase
+  const { data: order, error: orderErr } = await claveSupabase
     .from("orders")
     .select("id")
     .eq("id", order_id)
     .eq("client_id", usuario.id)
     .eq("business_id", business_id)
     .eq("status", "completed")
-    .single();
+    .maybeSingle();
 
+  if (orderErr) return res.status(500).json({ error: orderErr.message });
   if (!order) {
     return res.status(403).json({ error: "No puedes calificar este pedido. Debe estar completado y ser tuyo." });
   }
