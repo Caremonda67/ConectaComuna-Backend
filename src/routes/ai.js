@@ -5,26 +5,53 @@ const ruta = Router();
 
 // Centro de referencia de la comuna (Cali) si el usuario no tiene ubicación definida
 const CENTRO_COMUNA_DEFAULT = {
-  lat: 3.4215,
-  lng: -76.5120,
-  barrio: "Antonio Nariño",
+  lat: 3.4372,
+  lng: -76.5225,
+  barrio: "Comuna",
 };
+
+const BARRIOS_COORDENADAS = {
+  "antonio nariño": { barrio: "Antonio Nariño", lat: 3.4365, lng: -76.5255 },
+  "antonio narino": { barrio: "Antonio Nariño", lat: 3.4365, lng: -76.5255 },
+  "el rodeo": { barrio: "El Rodeo", lat: 3.4401, lng: -76.5209 },
+  "nueva floresta": { barrio: "Nueva Floresta", lat: 3.4342, lng: -76.5281 },
+  "vallado": { barrio: "Vallado", lat: 3.4140, lng: -76.5050 },
+  "san judas": { barrio: "San Judas", lat: 3.4215, lng: -76.5120 },
+  "ciudad córdoba": { barrio: "Ciudad Córdoba", lat: 3.4180, lng: -76.5080 },
+  "ciudad cordoba": { barrio: "Ciudad Córdoba", lat: 3.4180, lng: -76.5080 },
+  "mariano ramos": { barrio: "Mariano Ramos", lat: 3.4130, lng: -76.5160 },
+  "república de israel": { barrio: "República de Israel", lat: 3.4240, lng: -76.5170 },
+  "republica de israel": { barrio: "República de Israel", lat: 3.4240, lng: -76.5170 },
+};
+
+function detectarBarrioEnTexto(texto) {
+  if (!texto || typeof texto !== "string") return null;
+  const t = texto.toLowerCase();
+  for (const [clave, datos] of Object.entries(BARRIOS_COORDENADAS)) {
+    if (t.includes(clave)) {
+      return datos;
+    }
+  }
+  return null;
+}
 
 /**
  * Normaliza y describe la ubicación de forma humana para evitar frases como "en Mi ubicación".
  */
-function describirUbicacion(barrio) {
-  if (!barrio || barrio.toLowerCase().includes("ubicación") || barrio.toLowerCase().includes("ubicacion")) {
+function describirUbicacion(barrio, esDefinida = true) {
+  if (!esDefinida || !barrio || barrio === "Comuna" || barrio === "Cali" || barrio.toLowerCase().includes("mi ubicación") || barrio.toLowerCase().includes("mi ubicacion")) {
     return {
-      cercaDe: "cerca de tu ubicación actual en la comuna",
-      enBarrio: "tu zona en la comuna",
-      etiquetaCorta: "Cerca de ti",
+      cercaDe: "en nuestra comuna",
+      enBarrio: "toda nuestra comuna",
+      etiquetaCorta: "Comuna",
+      esDefinida: false,
     };
   }
   return {
     cercaDe: `cerca del barrio ${barrio}`,
     enBarrio: `el barrio ${barrio}`,
     etiquetaCorta: `Barrio ${barrio}`,
+    esDefinida: true,
   };
 }
 
@@ -116,10 +143,79 @@ async function obtenerPedidosUsuario(userId, businessId) {
  */
 function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
   const texto = mensaje.toLowerCase().trim();
-  const barrio = ubicacionUsuario?.barrio || CENTRO_COMUNA_DEFAULT.barrio;
-  const lat = ubicacionUsuario?.lat || CENTRO_COMUNA_DEFAULT.lat;
-  const lng = ubicacionUsuario?.lng || CENTRO_COMUNA_DEFAULT.lng;
-  const descUbi = describirUbicacion(barrio);
+  const barrioDetectado = detectarBarrioEnTexto(texto);
+  const tieneUbicacionExplicita = !!(
+    barrioDetectado ||
+    (ubicacionUsuario?.esDefinida && ubicacionUsuario?.barrio && ubicacionUsuario.barrio !== "Comuna" && ubicacionUsuario.barrio !== "Cali")
+  );
+
+  const barrio = barrioDetectado?.barrio || (tieneUbicacionExplicita ? ubicacionUsuario?.barrio : null);
+  const lat = barrioDetectado?.lat || (tieneUbicacionExplicita ? ubicacionUsuario?.lat : null);
+  const lng = barrioDetectado?.lng || (tieneUbicacionExplicita ? ubicacionUsuario?.lng : null);
+  const descUbi = describirUbicacion(barrio, tieneUbicacionExplicita);
+
+  // 0a. Detección y confirmación explícita al indicar barrio por texto o botón
+  if (barrioDetectado && (texto.includes("estoy") || texto.includes("vivo") || texto.includes("barrio") || texto.startsWith("en ") || texto === barrioDetectado.barrio.toLowerCase())) {
+    const ordenados = negocios.map((n) => ({
+      ...n,
+      distanciaMetros: calcularDistanciaMetros(barrioDetectado.lat, barrioDetectado.lng, n.lat, n.lng),
+    })).sort((a, b) => (a.distanciaMetros || 999999) - (b.distanciaMetros || 999999));
+
+    return {
+      mensaje: `¡Listo vecino! He fijado tu ubicación en el barrio ${barrioDetectado.barrio}. Estos son los oficios más cercanos a tu zona:`,
+      tipo: "negocios",
+      ubicacionDetectada: {
+        barrio: barrioDetectado.barrio,
+        lat: barrioDetectado.lat,
+        lng: barrioDetectado.lng,
+      },
+      negociosSugeridos: ordenados.slice(0, 3).map((n) => ({
+        id: n.id,
+        nombre: n.name,
+        categoria: n.category,
+        barrio: n.neighborhood,
+        whatsapp: n.whatsapp,
+        distanciaMetros: n.distanciaMetros,
+        verificado: n.verification_status === "verified",
+      })),
+      sugerencias: ["Ver en el mapa", "¿Cómo funciona el Trato Seguro?", "Buscar otro oficio"],
+    };
+  }
+
+  // 0b. Pregunta por cercanía ("cuál es el comercio más cercano") cuando la ubicación aún no está definida
+  const esPreguntaCercania =
+    texto.includes("más cercano") ||
+    texto.includes("mas cercano") ||
+    texto.includes("cerca de mí") ||
+    texto.includes("cerca de mi") ||
+    texto.includes("más cerca") ||
+    texto.includes("mas cerca") ||
+    texto === "oficios cerca" ||
+    texto === "oficios cercanos" ||
+    texto.includes("comercio más cercano") ||
+    texto.includes("comercio mas cercano");
+
+  if (esPreguntaCercania && !tieneUbicacionExplicita) {
+    return {
+      mensaje: `Vecino, aún no conozco tu barrio o ubicación exacta en la comuna para calcularte distancias precisas. Puedes activar tu ubicación con el botón de GPS o indicarme en qué barrio te encuentras (por ejemplo: Antonio Nariño, El Rodeo, Nueva Floresta, Vallado).\n\nMientras tanto, aquí tienes algunos de los oficios y talleres más recomendados de la comuna:`,
+      tipo: "negocios",
+      negociosSugeridos: negocios.slice(0, 3).map((n) => ({
+        id: n.id,
+        nombre: n.name,
+        categoria: n.category,
+        barrio: n.neighborhood,
+        whatsapp: n.whatsapp,
+        distanciaMetros: null,
+        verificado: n.verification_status === "verified",
+      })),
+      sugerencias: [
+        "📍 Usar mi ubicación actual",
+        "Estoy en El Rodeo",
+        "Estoy en Antonio Nariño",
+        "Estoy en Nueva Floresta",
+      ],
+    };
+  }
 
   const esAutenticado = !!contexto?.autenticado;
   const tipoCuenta = contexto?.tipoCuenta || (esAutenticado ? 'client' : 'anonimo');
@@ -764,8 +860,8 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
 /**
  * Prompt del sistema con toda la base de conocimiento de ConectaComuna para Gemini.
  */
-function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}) {
-  const descUbi = describirUbicacion(barrioUsuario);
+function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}, tieneUbicacionExplicita = false) {
+  const descUbi = describirUbicacion(barrioUsuario, tieneUbicacionExplicita);
   const esAutenticado = !!contexto?.autenticado;
   const nombreUsuario = contexto?.nombre || "vecino";
   const tipoCuenta = contexto?.tipoCuenta || (esAutenticado ? "client" : "anonimo");
@@ -794,9 +890,22 @@ function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}
   return `Eres el "Asistente Comunal de ConectaComuna", un copiloto barrial para los habitantes y micro-emprendedores de la Comuna en Cali, Colombia.
 Tu tono es humano, cálido, respetuoso, solidario y sin tecnicismos ("vecino", "vecina", trato amable colombiano/caleño).
 
-INFORMACIÓN DEL USUARIO ACTUAL:
-- Ubicación activa del usuario: ${descUbi.enBarrio} (Coordenadas aprox: ${lat}, ${lng}).
-- REGLA ESTRICTA DE REDACCIÓN DE UBICACIÓN: NUNCA digas "en Mi ubicación" ni "en tu ubicación". En su lugar, di siempre "${descUbi.cercaDe}" o "${descUbi.enBarrio}".
+INFORMACIÓN DE UBICACIÓN DEL USUARIO:
+${tieneUbicacionExplicita
+  ? `- Ubicación activa del usuario: ${descUbi.enBarrio} (Coordenadas aprox: ${lat}, ${lng}).
+- REGLA DE REDACCIÓN: Di siempre "${descUbi.cercaDe}" o "${descUbi.enBarrio}". Puedes indicar distancias relativas aproximadas.`
+  : `- Ubicación activa del usuario: NO DEFINIDA (el usuario aún no ha indicado su barrio ni activado GPS).
+- REGLA ESTRICTA DE UBICACIÓN NO DEFINIDA:
+  1. JAMÁS asumas por defecto que el usuario está en Antonio Nariño ni en ningún barrio específico.
+  2. Si el usuario pregunta "cuál es el comercio más cercano", "qué negocio me queda más cerca", "oficios cerca" o pregunta distancias:
+     • Respóndele amablemente que aún no conoces en qué barrio de la comuna se encuentra para calcularle distancias precisas.
+     • Invítalo a compartir su GPS o indicarte su barrio (por ejemplo: Antonio Nariño, El Rodeo, Nueva Floresta, Vallado).
+     • Ofrécele los oficios recomendados de la comuna sin inventar distancias en metros.
+     • En "sugerencias" pon siempre: ["📍 Usar mi ubicación actual", "Estoy en El Rodeo", "Estoy en Antonio Nariño", "Estoy en Nueva Floresta"].
+  3. Si el usuario indica su barrio (ej: "Estoy en El Rodeo", "vivo en San Judas", "mi barrio es Nueva Floresta"):
+     • Confírmale que has ubicado su zona en ese barrio.
+     • Incluye en el JSON: "ubicacionDetectada": { "barrio": "NombreDelBarrio", "lat": 3.4..., "lng": -76.5... }.
+     • Prioriza los negocios recomendados según cercanía a ese barrio.`}
 - Estado de autenticación: ${esAutenticado ? "Usuario con sesión iniciada" : "Visitante anónimo (sin sesión)"}.
 - Nombre del usuario: ${nombreUsuario}.
 - Tipo de cuenta / Rol: ${tipoCuenta}.
@@ -870,9 +979,15 @@ ruta.post("/chat", async (req, res) => {
     return res.status(400).json({ error: "El mensaje es obligatorio." });
   }
 
-  const barrioUsuario = ubicacion?.barrio || CENTRO_COMUNA_DEFAULT.barrio;
-  const lat = ubicacion?.lat || CENTRO_COMUNA_DEFAULT.lat;
-  const lng = ubicacion?.lng || CENTRO_COMUNA_DEFAULT.lng;
+  const barrioDetectado = detectarBarrioEnTexto(mensaje);
+  const tieneUbicacionExplicita = !!(
+    barrioDetectado ||
+    (ubicacion && ubicacion.esDefinida !== false && ubicacion.barrio && ubicacion.barrio !== "Comuna" && ubicacion.barrio !== "Cali")
+  );
+
+  const barrioUsuario = barrioDetectado?.barrio || (tieneUbicacionExplicita ? ubicacion?.barrio : null);
+  const lat = barrioDetectado?.lat || (tieneUbicacionExplicita && ubicacion?.lat ? Number(ubicacion.lat) : null);
+  const lng = barrioDetectado?.lng || (tieneUbicacionExplicita && ubicacion?.lng ? Number(ubicacion.lng) : null);
 
   // Consultar negocios reales
   const negocios = await obtenerNegociosComuna();
@@ -900,9 +1015,28 @@ ruta.post("/chat", async (req, res) => {
 
   // Intenciones de acción directa (botones y navegación)
   // Se atienden con el motor local para respuesta inmediata (<5ms) y cero errores
+  const esPreguntaCercaniaDirecta =
+    textoLimpio.includes("más cercano") ||
+    textoLimpio.includes("mas cercano") ||
+    textoLimpio.includes("cerca de mí") ||
+    textoLimpio.includes("cerca de mi") ||
+    textoLimpio.includes("más cerca") ||
+    textoLimpio.includes("mas cerca") ||
+    textoLimpio === "oficios cerca" ||
+    textoLimpio === "oficios cercanos" ||
+    textoLimpio.includes("comercio más cercano") ||
+    textoLimpio.includes("comercio mas cercano");
+
+  const esFijarBarrioDirecto = !!(
+    barrioDetectado &&
+    (textoLimpio.includes("estoy") || textoLimpio.includes("vivo") || textoLimpio.includes("barrio") || textoLimpio.startsWith("en ") || textoLimpio === barrioDetectado.barrio.toLowerCase())
+  );
+
   const esIntencionDirecta =
     matchCodigoDirecto ||
     esConsultaPedidosDirecta ||
+    esFijarBarrioDirecto ||
+    (esPreguntaCercaniaDirecta && !tieneUbicacionExplicita) ||
     textoLimpio === "ver en el mapa" ||
     textoLimpio.includes("en el mapa") ||
     textoLimpio === "buscar otro oficio" ||
@@ -932,7 +1066,7 @@ ruta.post("/chat", async (req, res) => {
   if (!apiKey || esIntencionDirecta) {
     const respuestaLocal = motorRespaldoLocal(
       mensaje,
-      { barrio: barrioUsuario, lat, lng },
+      { barrio: barrioUsuario, lat, lng, esDefinida: tieneUbicacionExplicita },
       negocios,
       historial,
       contexto
@@ -942,7 +1076,7 @@ ruta.post("/chat", async (req, res) => {
 
   // Para consultas abiertas o conversación natural, usar Gemini 3.5 Flash
   try {
-    const promptSistema = construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto);
+    const promptSistema = construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto, tieneUbicacionExplicita);
 
     const contenidos = [];
     const historialFiltrado = historial.slice(-6);

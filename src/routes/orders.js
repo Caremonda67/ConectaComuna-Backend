@@ -42,22 +42,32 @@ ruta.get("/verificar/:codigo", async (req, res) => {
       }
     }
 
-    // 3. Fallback de semillas de prueba para jurados/evaluadores (ord-1, ord-2)
-    if (!orderData && (limpio === "ord-1" || limpio === "ord-2")) {
+    // 3. Fallback de semillas de prueba para jurados/evaluadores (ord-1, ord-2, ord-3)
+    if (!orderData && (limpio === "ord-1" || limpio === "ord-2" || limpio === "ord-3")) {
       orderData = {
-        id: limpio === "ord-1" ? "ord-1-demostracion" : "ord-2-demostracion",
-        title: limpio === "ord-1" ? "Manicure semipermanente y cuidado de uñas" : "Arreglo de bastas de 3 pantalones",
-        description: limpio === "ord-1" ? "Servicio a domicilio en Antonio Nariño." : "Ajuste de 5 cm de basta.",
-        status: limpio === "ord-1" ? "pending" : "completed",
+        id: limpio === "ord-1" ? "ord-1-demostracion" : limpio === "ord-2" ? "ord-2-demostracion" : "ord-3-demostracion",
+        title:
+          limpio === "ord-1"
+            ? "Manicure semipermanente y cuidado de uñas"
+            : limpio === "ord-2"
+            ? "Arreglo de bastas de 3 pantalones"
+            : "Confección de uniforme escolar",
+        description:
+          limpio === "ord-1"
+            ? "Servicio a domicilio en Antonio Nariño."
+            : limpio === "ord-2"
+            ? "Ajuste de 5 cm de basta."
+            : "Dos jardineras escolares talla 10.",
+        status: limpio === "ord-1" ? "pending" : limpio === "ord-2" ? "completed" : "in_progress",
         created_at: new Date(Date.now() - 86400000).toISOString(),
         scheduled_for: new Date(Date.now() + 86400000).toISOString(),
-        final_price: limpio === "ord-1" ? null : 30000,
-        price_estimate: limpio === "ord-1" ? 45000 : 30000,
-        advance_payment: limpio === "ord-1" ? 20000 : 15000,
+        final_price: limpio === "ord-1" ? null : limpio === "ord-2" ? 30000 : 120000,
+        price_estimate: limpio === "ord-1" ? 45000 : limpio === "ord-2" ? 30000 : 120000,
+        advance_payment: limpio === "ord-1" ? 20000 : limpio === "ord-2" ? 15000 : 60000,
         service_location_type: limpio === "ord-1" ? "home_delivery" : "workshop",
         delivery_address: limpio === "ord-1" ? "Carrera 40 # 42-15" : null,
         business: {
-          id: "biz-1",
+          id: limpio === "ord-1" ? "biz-1" : "biz-2",
           name: limpio === "ord-1" ? "Uñas & Belleza Comunal" : "Costuras Doña Marta",
           category: limpio === "ord-1" ? "belleza" : "costura",
           phone: "3123456789",
