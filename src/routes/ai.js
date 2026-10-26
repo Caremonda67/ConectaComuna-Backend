@@ -72,12 +72,47 @@ async function obtenerNegociosComuna() {
  * Motor local inteligente y con memoria de contexto multi-turno.
  * Garantiza respuestas naturales y útiles para todas las sugerencias y flujos del sistema.
  */
-function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = []) {
+function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
   const texto = mensaje.toLowerCase().trim();
   const barrio = ubicacionUsuario?.barrio || CENTRO_COMUNA_DEFAULT.barrio;
   const lat = ubicacionUsuario?.lat || CENTRO_COMUNA_DEFAULT.lat;
   const lng = ubicacionUsuario?.lng || CENTRO_COMUNA_DEFAULT.lng;
   const descUbi = describirUbicacion(barrio);
+
+  const esAutenticado = !!contexto?.autenticado;
+  const tipoCuenta = contexto?.tipoCuenta || (esAutenticado ? 'client' : 'anonimo');
+  const esCliente = tipoCuenta === 'client';
+  const esEmprendedor = tipoCuenta === 'business' || contexto?.rolActivo === 'business';
+  const tieneNegocio = !!contexto?.negocioPropio?.tieneNegocio;
+  const nombreUsuario = contexto?.nombre ? contexto.nombre.split(' ')[0] : 'vecino';
+  const nombreNegocio = contexto?.negocioPropio?.nombre || 'tu negocio';
+
+  // 0. Confirmación explícita para activar perfil de negocio
+  if (
+    texto === 'sí, activar mi negocio' ||
+    texto === 'si, activar mi negocio' ||
+    texto === 'activar mi negocio' ||
+    texto === 'confirmar activar negocio'
+  ) {
+    return {
+      mensaje: `¡Excelente decisión, ${nombreUsuario}! He preparado la activación de tu perfil de Emprendedor. Toca el botón para completar los datos de tu taller (nombre, categoría y fotos):`,
+      tipo: 'navegacion',
+      rutaNavegacion: '/panel/negocio',
+      sugerencias: ['🎙️ Dictar mi servicio para el catálogo', 'Ver en el mapa'],
+    };
+  }
+
+  if (
+    texto === 'no por ahora' ||
+    texto === 'no, mantener como cliente' ||
+    texto === 'cancelar activación'
+  ) {
+    return {
+      mensaje: `Entendido, ${nombreUsuario}. Tu cuenta continúa en rol de Cliente para buscar, consultar y contactar los mejores oficios de la comuna. ¿En qué te colaboro hoy?`,
+      tipo: 'conversacion',
+      sugerencias: ['Oficios cerca de mí', 'Ver en el mapa', '¿Cómo funciona el Trato Seguro?'],
+    };
+  }
 
   // Filtrado de negocios con cálculo de distancia
   const negociosConDistancia = negocios.map((n) => ({
@@ -157,7 +192,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [])
     };
   }
 
-  // 4. Registro de nuevo negocio / Crear perfil
+  // 4. Registro de nuevo negocio / Crear perfil (Con puerta lógica de confirmación)
   if (
     texto.includes("crear perfil") ||
     texto.includes("crear negocio") ||
@@ -165,13 +200,64 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [])
     texto.includes("como me registro") ||
     texto.includes("registrar mi negocio") ||
     texto.includes("cómo publicar") ||
-    texto.includes("como publicar")
+    texto.includes("como publicar") ||
+    texto.includes("publicar mi servicio") ||
+    texto.includes("publicar servicio") ||
+    texto.includes("quiero vender") ||
+    texto.includes("quiero ofrecer")
   ) {
+    if (esAutenticado && tieneNegocio) {
+      return {
+        mensaje: `¡Hola ${nombreUsuario}! Ya tienes registrado tu taller "${nombreNegocio}". Puedes dictarme un nuevo servicio para agregarlo a tu catálogo o ir a tu panel para editar tus datos:`,
+        tipo: "conversacion",
+        sugerencias: ["🎙️ Dictar mi servicio para el catálogo", "Ir al panel de mi negocio", "Ver en el mapa"],
+      };
+    }
+
+    if (esAutenticado && esEmprendedor && !tieneNegocio) {
+      return {
+        mensaje: `¡Hola ${nombreUsuario}! Tu cuenta ya está en modo Emprendedor. Solo te falta completar la ficha de tu taller (nombre, oficio y contacto) para que aparezcas en el directorio comunal.`,
+        tipo: "navegacion",
+        rutaNavegacion: "/panel/negocio",
+        sugerencias: ["Completar ficha de mi taller", "🎙️ Dictar mi servicio para el catálogo"],
+      };
+    }
+
+    if (esAutenticado && esCliente) {
+      return {
+        mensaje: `Hola ${nombreUsuario}, actualmente tu cuenta está registrada como **Cliente**. Para publicar tus servicios y tener tu taller visible en el mapa barrial, activaremos tu perfil como **Emprendedor** (podrás seguir pidiendo servicios a otros vecinos normalmente).\n\n¿Deseas activar tu perfil de negocio ahora?`,
+        tipo: "confirmacion_accion",
+        accionPendiente: {
+          tipo: "activar_negocio",
+          titulo: "Activar perfil de Emprendedor",
+          descripcion: "Permite publicar tu oficio, definir tarifas y recibir pedidos de la comuna.",
+          botonConfirmar: "✅ Sí, activar mi negocio",
+          botonCancelar: "❌ No por ahora",
+        },
+        sugerencias: ["✅ Sí, activar mi negocio", "❌ No por ahora"],
+      };
+    }
+
     return {
-      mensaje: `¡Publicar tu oficio es 100% gratuito y toma menos de 2 minutos! Así tus vecinos podrán encontrarte en el mapa y pedirte servicios por WhatsApp sin comisiones ni intermediarios.`,
+      mensaje: `¡Publicar tu oficio es 100% gratuito y toma menos de 2 minutos! Como aún no has iniciado sesión en ConectaComuna, toca el botón para crear tu cuenta vecinal:`,
       tipo: "navegacion",
       rutaNavegacion: "/registro?tipo=business",
       sugerencias: ["¿Qué necesito para registrarme?", "🎙️ Dictar mi servicio para el catálogo", "¿Qué es el facilitador?"],
+    };
+  }
+
+  // 4b. Navegación al panel del negocio
+  if (
+    texto === "ir al panel de mi negocio" ||
+    texto === "ver mi panel de negocio" ||
+    texto === "mi panel" ||
+    texto === "ver mi negocio"
+  ) {
+    return {
+      mensaje: `¡Con gusto, ${nombreUsuario}! Aquí puedes gestionar tus pedidos, ver tus calificaciones, vincular a tu facilitador y editar la información de tu taller:`,
+      tipo: "navegacion",
+      rutaNavegacion: "/panel",
+      sugerencias: ["🎙️ Dictar mi servicio para el catálogo", "Ver en el mapa", "¿Cómo funciona el Trato Seguro?"],
     };
   }
 
@@ -265,7 +351,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [])
     };
   }
 
-  // 10. Trato Seguro / Anticipo
+  // 10. Trato Seguro / Anticipo con validación lógica del 50%
   if (
     texto.includes("trato seguro") ||
     texto.includes("anticipo") ||
@@ -273,6 +359,16 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [])
     texto.includes("garantía") ||
     texto.includes("50%")
   ) {
+    const matchPorcentaje = texto.match(/(\d{2,3})\s*%/);
+    if (matchPorcentaje && parseInt(matchPorcentaje[1], 10) > 50) {
+      const pct = matchPorcentaje[1];
+      return {
+        mensaje: `Vecino, por las reglas de Trato Seguro Comunal, ningún anticipo para compra de repuestos o materiales puede superar el 50% (pediste un ${pct}%). Este límite protege tu dinero y garantiza el cumplimiento del artesano.\n\n¿Deseas que preparemos el acuerdo con el 50% máximo permitido?`,
+        tipo: "conversacion",
+        sugerencias: ["Sí, con el 50%", "¿Cómo funciona el Trato Seguro?", "Ver oficios cercanos"],
+      };
+    }
+
     return {
       mensaje: `¡Hola vecino! El Trato Seguro Comunal es el pacto de confianza de nuestro barrio:\n1. Ningún anticipo para compra de materiales puede superar el 50% del total acordado.\n2. Todo queda registrado por escrito con código de verificación oficial.\n3. Si surge algún desacuerdo, cuentas con mediación vecinal comunitaria antes de cualquier conflicto.`,
       tipo: "conversacion",
@@ -368,8 +464,37 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [])
       titulo = "Preparación de alimentos caseros";
     }
 
+    if (esAutenticado && tieneNegocio) {
+      return {
+        mensaje: `¡Qué buen oficio! He estructurado este servicio para tu negocio "${nombreNegocio}". Revisa los datos y puedes guardarlo de verdad en tu catálogo con un toque:`,
+        tipo: "servicio_catalogo",
+        servicio: {
+          titulo,
+          descripcion: mensaje,
+          precioSugerido: precio,
+          categoria,
+        },
+        sugerencias: ["Guardar en mi catálogo", "Cambiar el precio", "¿Cómo funciona el anticipo?"],
+      };
+    }
+
+    if (esAutenticado && esCliente) {
+      return {
+        mensaje: `¡Excelente servicio, ${nombreUsuario}! He estructurado tu tarifa a ${precio.toLocaleString("es-CO")} COP. Para poder publicarlo en el catálogo vecinal, primero debemos activar tu perfil de Emprendedor. ¿Deseas activarlo ahora?`,
+        tipo: "confirmacion_accion",
+        accionPendiente: {
+          tipo: "activar_negocio",
+          titulo: "Activar perfil de Emprendedor",
+          descripcion: `Para publicar "${titulo}" en el directorio comunal.`,
+          botonConfirmar: "✅ Sí, activar mi negocio",
+          botonCancelar: "❌ No por ahora",
+        },
+        sugerencias: ["✅ Sí, activar mi negocio", "❌ No por ahora"],
+      };
+    }
+
     return {
-      mensaje: `¡Qué buen oficio! He estructurado tu servicio para los vecinos de ${descUbi.enBarrio}. Revisa los datos y puedes guardarlo en tu catálogo con un solo toque:`,
+      mensaje: `¡Qué buen oficio! He estructurado tu servicio para los vecinos de ${descUbi.enBarrio}. Revisa los datos y puedes guardarlo en tu catálogo creando tu negocio:`,
       tipo: "servicio_catalogo",
       servicio: {
         titulo,
@@ -377,7 +502,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [])
         precioSugerido: precio,
         categoria,
       },
-      sugerencias: ["Guardar en mi catálogo", "Cambiar el precio", "¿Cómo funciona el anticipo?"],
+      sugerencias: ["Crear negocio para publicar", "Cambiar el precio", "¿Cómo funciona el anticipo?"],
     };
   }
 
@@ -464,8 +589,15 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [])
 /**
  * Prompt del sistema con toda la base de conocimiento de ConectaComuna para Gemini.
  */
-function construirPromptSistema(negocios, barrioUsuario, lat, lng) {
+function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}) {
   const descUbi = describirUbicacion(barrioUsuario);
+  const esAutenticado = !!contexto?.autenticado;
+  const nombreUsuario = contexto?.nombre || "vecino";
+  const tipoCuenta = contexto?.tipoCuenta || (esAutenticado ? "client" : "anonimo");
+  const tieneNegocio = !!contexto?.negocioPropio?.tieneNegocio;
+  const nombreNegocio = contexto?.negocioPropio?.nombre || "Sin taller aún";
+  const rutaActual = contexto?.pantallaActual?.ruta || "/";
+
   const listaNegocios = negocios
     .map(
       (n) =>
@@ -479,6 +611,22 @@ Tu tono es humano, cálido, respetuoso, solidario y sin tecnicismos ("vecino", "
 INFORMACIÓN DEL USUARIO ACTUAL:
 - Ubicación activa del usuario: ${descUbi.enBarrio} (Coordenadas aprox: ${lat}, ${lng}).
 - REGLA ESTRICTA DE REDACCIÓN DE UBICACIÓN: NUNCA digas "en Mi ubicación" ni "en tu ubicación". En su lugar, di siempre "${descUbi.cercaDe}" o "${descUbi.enBarrio}".
+- Estado de autenticación: ${esAutenticado ? "Usuario con sesión iniciada" : "Visitante anónimo (sin sesión)"}.
+- Nombre del usuario: ${nombreUsuario}.
+- Tipo de cuenta / Rol: ${tipoCuenta}.
+- Negocio propio: ${tieneNegocio ? `Es dueño de "${nombreNegocio}"` : "No tiene negocio creado"}.
+- Pantalla actual: ${rutaActual}.
+
+REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
+1. SI EL USUARIO YA ESTÁ AUTENTICADO:
+   - JAMÁS lo envíes a /registro ni a crear cuenta nueva. Ya tiene cuenta.
+   - Si su cuenta es "client" y dice que quiere crear o registrar un negocio o vender algo, NO lo conviertas en secreto: pídele confirmación explícita para activar su perfil como Emprendedor usando tipo: "confirmacion_accion".
+   - Si su cuenta es "business" y no tiene ficha de taller, guíalo a /panel/negocio.
+   - Si ya tiene negocio ("${nombreNegocio}"), háblale como dueño de ese taller.
+2. VISITANTE ANÓNIMO:
+   - Solo a quien no ha iniciado sesión se le sugiere ir a /registro?tipo=business o /entrar.
+3. TRATO SEGURO:
+   - El anticipo máximo legal es del 50%. Si alguien solicita más, corrígelo con amabilidad.
 
 REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
 1. NAVEGACIÓN Y MAPA:
@@ -523,7 +671,7 @@ Debes responder SIEMPRE un único objeto JSON válido con la siguiente estructur
  * Endpoint principal de conversación con el Asistente Comunal
  */
 ruta.post("/chat", async (req, res) => {
-  const { mensaje, historial = [], ubicacion } = req.body;
+  const { mensaje, historial = [], ubicacion, contexto } = req.body;
 
   if (!mensaje || typeof mensaje !== "string" || !mensaje.trim()) {
     return res.status(400).json({ error: "El mensaje es obligatorio." });
@@ -546,8 +694,20 @@ ruta.post("/chat", async (req, res) => {
     textoLimpio.includes("en el mapa") ||
     textoLimpio === "buscar otro oficio" ||
     textoLimpio === "explorar oficios" ||
-    textoLimpio === "crear perfil" ||
-    textoLimpio === "crear negocio" ||
+    textoLimpio.includes("crear perfil") ||
+    textoLimpio.includes("crear negocio") ||
+    textoLimpio.includes("publicar mi servicio") ||
+    textoLimpio.includes("publicar servicio") ||
+    textoLimpio.includes("registrar mi negocio") ||
+    textoLimpio.includes("quiero vender") ||
+    textoLimpio.includes("quiero ofrecer") ||
+    textoLimpio === "sí, activar mi negocio" ||
+    textoLimpio === "si, activar mi negocio" ||
+    textoLimpio === "no por ahora" ||
+    textoLimpio === "no, mantener como cliente" ||
+    textoLimpio === "ir al panel de mi negocio" ||
+    textoLimpio === "ver mi panel de negocio" ||
+    textoLimpio === "mi panel" ||
     textoLimpio.includes("dictar mi servicio") ||
     textoLimpio === "cambiar el precio" ||
     textoLimpio === "guardar en mi catálogo" ||
@@ -561,14 +721,15 @@ ruta.post("/chat", async (req, res) => {
       mensaje,
       { barrio: barrioUsuario, lat, lng },
       negocios,
-      historial
+      historial,
+      contexto
     );
     return res.json(respuestaLocal);
   }
 
   // Para consultas abiertas o conversación natural, usar Gemini 3.5 Flash
   try {
-    const promptSistema = construirPromptSistema(negocios, barrioUsuario, lat, lng);
+    const promptSistema = construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto);
 
     const contenidos = [];
     const historialFiltrado = historial.slice(-6);
@@ -627,7 +788,8 @@ ruta.post("/chat", async (req, res) => {
         mensaje,
         { barrio: barrioUsuario, lat, lng },
         negocios,
-        historial
+        historial,
+        contexto
       );
       return res.json(fallback);
     }
@@ -640,7 +802,8 @@ ruta.post("/chat", async (req, res) => {
         mensaje,
         { barrio: barrioUsuario, lat, lng },
         negocios,
-        historial
+        historial,
+        contexto
       );
       return res.json(fallback);
     }
