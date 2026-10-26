@@ -42,41 +42,44 @@ ruta.get("/verificar/:codigo", async (req, res) => {
       }
     }
 
-    // 3. Fallback de semillas de prueba para jurados/evaluadores (ord-1, ord-2, ord-3)
-    if (!orderData && (limpio === "ord-1" || limpio === "ord-2" || limpio === "ord-3")) {
+    // 3. Fallback de semillas de prueba para jurados/evaluadores (demo2026, demo, ord-1, ord-2, ord-3)
+    if (!orderData && (limpio === "demo2026" || limpio === "demo" || limpio === "ord-1" || limpio === "ord-2" || limpio === "ord-3")) {
+      const isDemo = limpio === "demo2026" || limpio === "demo";
       orderData = {
-        id: limpio === "ord-1" ? "ord-1-demostracion" : limpio === "ord-2" ? "ord-2-demostracion" : "ord-3-demostracion",
-        title:
-          limpio === "ord-1"
-            ? "Manicure semipermanente y cuidado de uñas"
-            : limpio === "ord-2"
-            ? "Arreglo de bastas de 3 pantalones"
-            : "Confección de uniforme escolar",
-        description:
-          limpio === "ord-1"
-            ? "Servicio a domicilio en Antonio Nariño."
-            : limpio === "ord-2"
-            ? "Ajuste de 5 cm de basta."
-            : "Dos jardineras escolares talla 10.",
-        status: limpio === "ord-1" ? "pending" : limpio === "ord-2" ? "completed" : "in_progress",
+        id: isDemo ? "demo-2026-acuerdo-comunal" : limpio === "ord-1" ? "ord-1-demostracion" : limpio === "ord-2" ? "ord-2-demostracion" : "ord-3-demostracion",
+        title: isDemo
+          ? "Restauración de comedor de madera y cambio de tapizado"
+          : limpio === "ord-1"
+          ? "Manicure semipermanente y cuidado de uñas"
+          : limpio === "ord-2"
+          ? "Arreglo de bastas de 3 pantalones"
+          : "Confección de uniforme escolar",
+        description: isDemo
+          ? "Lijado fino, barniz mate impermeable y retapizado en lino antifluidos para 4 sillas de comedor."
+          : limpio === "ord-1"
+          ? "Servicio a domicilio en Antonio Nariño."
+          : limpio === "ord-2"
+          ? "Ajuste de 5 cm de basta."
+          : "Dos jardineras escolares talla 10.",
+        status: isDemo ? "in_progress" : limpio === "ord-1" ? "pending" : limpio === "ord-2" ? "completed" : "in_progress",
         created_at: new Date(Date.now() - 86400000).toISOString(),
-        scheduled_for: new Date(Date.now() + 86400000).toISOString(),
-        final_price: limpio === "ord-1" ? null : limpio === "ord-2" ? 30000 : 120000,
-        price_estimate: limpio === "ord-1" ? 45000 : limpio === "ord-2" ? 30000 : 120000,
-        advance_payment: limpio === "ord-1" ? 20000 : limpio === "ord-2" ? 15000 : 60000,
-        service_location_type: limpio === "ord-1" ? "home_delivery" : "workshop",
-        delivery_address: limpio === "ord-1" ? "Carrera 40 # 42-15" : null,
+        scheduled_for: new Date(Date.now() + 172800000).toISOString(),
+        final_price: isDemo ? 160000 : limpio === "ord-1" ? null : limpio === "ord-2" ? 30000 : 120000,
+        price_estimate: isDemo ? 160000 : limpio === "ord-1" ? 45000 : limpio === "ord-2" ? 30000 : 120000,
+        advance_payment: isDemo ? 80000 : limpio === "ord-1" ? 20000 : limpio === "ord-2" ? 15000 : 60000,
+        service_location_type: isDemo ? "workshop" : limpio === "ord-1" ? "home_delivery" : "workshop",
+        delivery_address: isDemo ? "Calle 44 # 39B-18, Taller La Esperanza" : limpio === "ord-1" ? "Carrera 40 # 42-15" : null,
         business: {
-          id: limpio === "ord-1" ? "biz-1" : "biz-2",
-          name: limpio === "ord-1" ? "Uñas & Belleza Comunal" : "Costuras Doña Marta",
-          category: limpio === "ord-1" ? "belleza" : "costura",
-          phone: "3123456789",
-          barrio: "Antonio Nariño, Cali",
-          is_verified: true,
+          id: isDemo ? "biz-demo-ebanisteria" : limpio === "ord-1" ? "biz-1" : "biz-2",
+          name: isDemo ? "Ebanistería y Restauración Don Carlos" : limpio === "ord-1" ? "Uñas & Belleza Comunal" : "Costuras Doña Marta",
+          category: isDemo ? "arreglos" : limpio === "ord-1" ? "belleza" : "costura",
+          phone: "3187654321",
+          neighborhood: "Antonio Nariño, Comuna 16, Cali",
+          verification_status: "verified",
         },
         client: {
-          full_name: "Vecino de la Comuna",
-          phone: "3001234567",
+          full_name: isDemo ? "Esperanza Gómez (Vecina)" : "Vecino de la Comuna",
+          phone: "3159876543",
         },
       };
     }
@@ -95,7 +98,9 @@ ruta.get("/verificar/:codigo", async (req, res) => {
     const saldo = Math.max(0, precio - anticipo);
     const telCliente = orderData.client?.phone ? `...${orderData.client.phone.slice(-4)}` : null;
 
-    const codigoFormateado = limpio.startsWith("ord-")
+    const codigoFormateado = (limpio === "demo2026" || limpio === "demo")
+      ? "CC-DEMO2026"
+      : limpio.startsWith("ord-")
       ? `CC-${limpio.toUpperCase()}`
       : `CC-${orderData.id.slice(0, 8).toUpperCase()}`;
 
