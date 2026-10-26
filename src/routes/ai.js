@@ -87,8 +87,19 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios) {
     };
   }
 
-  // 3. Intención de publicar un servicio (Emprendedor)
-  if (texto.includes("vendo") || texto.includes("hago arreglos") || texto.includes("cobro") || texto.includes("mi servicio")) {
+  // 3. Intención de publicar o dictar un servicio (Emprendedor)
+  const esDictado =
+    texto.includes("vendo") ||
+    texto.includes("hago") ||
+    texto.includes("ofrezco") ||
+    texto.includes("cobro") ||
+    texto.includes("publicar") ||
+    texto.includes("mi servicio") ||
+    texto.includes("mi catalogo") ||
+    texto.includes("mi catálogo") ||
+    texto.includes("dictar");
+
+  if (esDictado) {
     const precioMatch = texto.match(/\b(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:mil|pesos|\$)?\b/);
     let precio = 20000;
     if (precioMatch) {
@@ -96,14 +107,38 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios) {
       precio = num < 1000 ? num * 1000 : num;
     }
 
+    let categoria = "otros";
+    let titulo = "Servicio de oficio comunal";
+
+    if (
+      texto.includes("vestido") ||
+      texto.includes("ropa") ||
+      texto.includes("pantalon") ||
+      texto.includes("confecci") ||
+      texto.includes("costura") ||
+      texto.includes("dobladillo")
+    ) {
+      categoria = "costura";
+      titulo = "Confección y arreglo de prendas";
+    } else if (texto.includes("chapa") || texto.includes("llave") || texto.includes("candado")) {
+      categoria = "cerrajeria";
+      titulo = "Servicio de cerrajería y aperturas";
+    } else if (texto.includes("celular") || texto.includes("pantalla") || texto.includes("computador") || texto.includes("tecnolog")) {
+      categoria = "tecnologia";
+      titulo = "Mantenimiento y arreglo técnico";
+    } else if (texto.includes("barber") || texto.includes("corte") || texto.includes("unas") || texto.includes("manicure")) {
+      categoria = "belleza";
+      titulo = "Cuidado personal y estética barrial";
+    }
+
     return {
       mensaje: `¡Qué buen oficio! He estructurado tu servicio para que los vecinos de ${barrio} se enteren de inmediato. Revisa los datos y puedes publicarlo con un solo toque:`,
       tipo: "servicio_catalogo",
       servicio: {
-        titulo: "Servicio de oficio y confección comunal",
+        titulo,
         descripcion: mensaje,
         precioSugerido: precio,
-        categoria: "costura",
+        categoria,
       },
       sugerencias: ["Guardar en mi catálogo", "Cambiar el precio", "¿Cómo funciona el anticipo?"],
     };
