@@ -69,6 +69,48 @@ async function obtenerNegociosComuna() {
 }
 
 /**
+ * Consulta pedidos y pactos de Trato Seguro activos del usuario para nutrir el contexto del asistente.
+ */
+async function obtenerPedidosUsuario(userId, businessId) {
+  if (!userId && !businessId) return [];
+  try {
+    let query = claveSupabase
+      .from("orders")
+      .select("id, title, status, price_estimate, final_price, advance_payment, business:businesses(name), client:profiles!orders_client_id_fkey(full_name)")
+      .order("created_at", { ascending: false })
+      .limit(6);
+
+    if (businessId && userId) {
+      query = query.or(`client_id.eq.${userId},business_id.eq.${businessId}`);
+    } else if (businessId) {
+      query = query.eq("business_id", businessId);
+    } else {
+      query = query.eq("client_id", userId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.warn("No se pudieron cargar pedidos para el asistente:", error.message);
+      return [];
+    }
+
+    return (data || []).map((o) => ({
+      id: o.id,
+      codigo: `CC-${o.id.slice(0, 8).toUpperCase()}`,
+      titulo: o.title,
+      estado: o.status,
+      monto: o.final_price || o.price_estimate || 0,
+      anticipo: o.advance_payment || 0,
+      contraparte: o.business?.name || o.client?.full_name || "Vecino",
+      rol: businessId ? "comerciante" : "cliente",
+    }));
+  } catch (err) {
+    console.warn("Excepción al consultar pedidos para IA:", err.message);
+    return [];
+  }
+}
+
+/**
  * Motor local inteligente y con memoria de contexto multi-turno.
  * Garantiza respuestas naturales y útiles para todas las sugerencias y flujos del sistema.
  */
@@ -109,6 +151,99 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
   ) {
     return {
       mensaje: `Entendido, ${nombreUsuario}. Tu cuenta continúa en rol de Cliente para buscar, consultar y contactar los mejores oficios de la comuna. ¿En qué te colaboro hoy?`,
+      tipo: 'conversacion',
+      sugerencias: ['Oficios cerca de mí', 'Ver en el mapa', '¿Cómo funciona el Trato Seguro?'],
+    };
+  }
+
+  // 0b. Detección directa de código oficial de Trato Seguro (ej: CC-93E416, CC-ORD-1)
+  const matchCodigo = texto.match(/\b(CC-[A-Z0-9]{4,10})\b/i);
+  if (matchCodigo) {
+    const cod = matchCodigo[1].toUpperCase();
+    const pedidoRelacionado = (contexto?.pedidosActivos || []).find(
+      (p) => p.codigo.toUpperCase() === cod || (p.id && p.id.toUpperCase().startsWith(cod.replace('CC-', '')))
+    );
+
+    let detalle = `¡He ubicado el acuerdo **${cod}** en el registro comunal!`;
+    if (pedidoRelacionado) {
+      const est =
+        pedidoRelacionado.estado === 'pending'
+          ? 'Pendiente de inicio'
+          : pedidoRelacionado.estado === 'accepted'
+          ? 'Pacto aceptado por el taller'
+          : pedidoRelacionado.estado === 'in_progress'
+          ? 'Trabajo en ejecución'
+          : pedidoRelacionado.estado === 'completed'
+          ? 'Finalizado y entregado'
+          : pedidoRelacionado.estado;
+      const contra = pedidoRelacionado.rol === 'comerciante' ? `Cliente: ${pedidoRelacionado.contraparte}` : `Taller: ${pedidoRelacionado.contraparte}`;
+      detalle += `\n• **Trabajo:** ${pedidoRelacionado.titulo}\n• **${contra}**\n• **Estado:** ${est}\n• **Valor:** $ ${Number(pedidoRelacionado.monto).toLocaleString('es-CO')} COP`;
+    }
+
+    return {
+      mensaje: `${detalle}\n\nToca el botón para consultar el comprobante oficial con código QR y verificación en tiempo real:`,
+      tipo: 'navegacion',
+      rutaNavegacion: `/trato-seguro/verificar/${cod}`,
+      sugerencias: ['¿Cómo funciona el Trato Seguro?', 'Ver mis pedidos activos', 'Ver oficios cercanos'],
+    };
+  }
+
+  // 0c. Consulta de pedidos o acuerdos del usuario ("mis pedidos", "cómo va mi pedido", etc.)
+  const esConsultaMisPedidos =
+    texto.includes('mis pedidos') ||
+    texto.includes('mi pedido') ||
+    texto.includes('mis acuerdos') ||
+    texto.includes('mis tratos') ||
+    texto.includes('mis pactos') ||
+    texto.includes('cómo va mi') ||
+    texto.includes('como va mi') ||
+    texto.includes('estado de mi') ||
+    texto.includes('trabajos en curso');
+
+  if (esConsultaMisPedidos) {
+    if (!esAutenticado) {
+      return {
+        mensaje: `Para consultar el estado de tus pedidos y acuerdos de Trato Seguro, por favor ingresa a tu cuenta vecinal:`,
+        tipo: 'navegacion',
+        rutaNavegacion: '/entrar',
+        sugerencias: ['Ingresar a mi cuenta', '¿Cómo funciona el Trato Seguro?', 'Ver oficios cercanos'],
+      };
+    }
+
+    const pedidos = Array.isArray(contexto?.pedidosActivos) ? contexto.pedidosActivos : [];
+    if (pedidos.length > 0) {
+      const primerPedido = pedidos[0];
+      const detallePedidos = pedidos
+        .map((p, idx) => {
+          const est =
+            p.estado === 'pending'
+              ? 'Pendiente de inicio'
+              : p.estado === 'accepted'
+              ? 'Aceptado por el taller'
+              : p.estado === 'in_progress'
+              ? 'En curso'
+              : p.estado === 'completed'
+              ? 'Finalizado'
+              : p.estado;
+          const contra = p.rol === 'comerciante' ? `Cliente: ${p.contraparte}` : `Taller: ${p.contraparte}`;
+          return `${idx + 1}. **#${p.codigo}** — "${p.titulo}" (${contra}) • **Estado:** ${est} • **Valor:** $ ${Number(p.monto).toLocaleString('es-CO')}`;
+        })
+        .join('\n');
+
+      return {
+        mensaje: `¡Hola ${nombreUsuario}! Tienes ${pedidos.length} acuerdo(s) en la comuna:\n\n${detallePedidos}\n\nPuedes consultar el comprobante oficial con código QR o ir a tu panel:`,
+        tipo: 'navegacion',
+        rutaNavegacion: `/trato-seguro/verificar/${primerPedido.codigo}`,
+        sugerencias: [
+          `Verificar ${primerPedido.codigo}`,
+          esEmprendedor ? 'Ir al panel de mi negocio' : 'Ver mis pedidos en el panel',
+          '¿Cómo funciona el Trato Seguro?',
+        ],
+      };
+    }
+
+    return {
+      mensaje: `Vecino ${nombreUsuario}, en este momento no tienes pedidos ni pactos activos registrados. Cuando solicites un servicio a un taller del barrio o recibas un encargo, aparecerá aquí con código verificable y tope de anticipo protegido.`,
       tipo: 'conversacion',
       sugerencias: ['Oficios cerca de mí', 'Ver en el mapa', '¿Cómo funciona el Trato Seguro?'],
     };
@@ -638,6 +773,17 @@ function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}
   const nombreNegocio = contexto?.negocioPropio?.nombre || "Sin taller aún";
   const rutaActual = contexto?.pantallaActual?.ruta || "/";
 
+  const pedidosActivos = Array.isArray(contexto?.pedidosActivos) ? contexto.pedidosActivos : [];
+  const listaPedidos =
+    pedidosActivos.length > 0
+      ? pedidosActivos
+          .map(
+            (p) =>
+              `- [Código: #${p.codigo}] Trabajo: "${p.titulo}" | Estado: ${p.estado} | Contraparte: ${p.contraparte} | Monto: $${p.monto} | Anticipo: $${p.anticipo || 0} | Rol: ${p.rol}`
+          )
+          .join('\n')
+      : "No tiene pedidos ni pactos activos en este momento.";
+
   const listaNegocios = negocios
     .map(
       (n) =>
@@ -657,6 +803,9 @@ INFORMACIÓN DEL USUARIO ACTUAL:
 - Negocio propio: ${tieneNegocio ? `Es dueño de "${nombreNegocio}"` : "No tiene negocio creado"}.
 - Pantalla actual: ${rutaActual}.
 
+PEDIDOS Y PACTOS ACTIVOS DEL USUARIO EN LA COMUNA:
+${listaPedidos}
+
 REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
 1. SI EL USUARIO YA ESTÁ AUTENTICADO:
    - JAMÁS lo envíes a /registro ni a crear cuenta nueva. Ya tiene cuenta.
@@ -665,8 +814,10 @@ REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
    - Si ya tiene negocio ("${nombreNegocio}"), háblale como dueño de ese taller.
 2. VISITANTE ANÓNIMO:
    - Solo a quien no ha iniciado sesión se le sugiere ir a /registro?tipo=business o /entrar.
-3. TRATO SEGURO:
+3. TRATO SEGURO Y PACTOS VECINALES:
    - El anticipo máximo legal es del 50%. Si alguien solicita más, corrígelo con amabilidad.
+   - Si el usuario pregunta por sus pedidos, acuerdos o cómo va su trabajo, respóndele con los datos REALES de la lista de pedidos de arriba con su código (#CC-...) y estado actual.
+   - Si el usuario menciona un código de verificación (como CC-93E416) o pide verificar un pacto, bríndale la información y asigna siempre "tipo": "navegacion" y "rutaNavegacion": "/trato-seguro/verificar/" + codigo.
 
 REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
 1. NAVEGACIÓN Y MAPA:
@@ -724,12 +875,32 @@ ruta.post("/chat", async (req, res) => {
   // Consultar negocios reales
   const negocios = await obtenerNegociosComuna();
 
+  // Si no se proporcionaron pedidos activos y el usuario está autenticado, cargarlos de Supabase
+  if (contexto && (contexto.userId || contexto?.negocioPropio?.id) && (!contexto.pedidosActivos || contexto.pedidosActivos.length === 0)) {
+    const pedidosCargados = await obtenerPedidosUsuario(contexto.userId, contexto?.negocioPropio?.id);
+    contexto.pedidosActivos = pedidosCargados;
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   const textoLimpio = mensaje.toLowerCase().trim();
+
+  const matchCodigoDirecto = /\b(CC-[A-Z0-9]{4,10})\b/i.test(textoLimpio);
+  const esConsultaPedidosDirecta =
+    textoLimpio.includes("mis pedidos") ||
+    textoLimpio.includes("mi pedido") ||
+    textoLimpio.includes("mis acuerdos") ||
+    textoLimpio.includes("mis tratos") ||
+    textoLimpio.includes("mis pactos") ||
+    textoLimpio.includes("cómo va mi") ||
+    textoLimpio.includes("como va mi") ||
+    textoLimpio.includes("estado de mi") ||
+    textoLimpio.includes("trabajos en curso");
 
   // Intenciones de acción directa (botones y navegación)
   // Se atienden con el motor local para respuesta inmediata (<5ms) y cero errores
   const esIntencionDirecta =
+    matchCodigoDirecto ||
+    esConsultaPedidosDirecta ||
     textoLimpio === "ver en el mapa" ||
     textoLimpio.includes("en el mapa") ||
     textoLimpio === "buscar otro oficio" ||
