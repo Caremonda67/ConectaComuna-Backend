@@ -164,7 +164,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
       (p) => p.codigo.toUpperCase() === cod || (p.id && p.id.toUpperCase().startsWith(cod.replace('CC-', '')))
     );
 
-    let detalle = `¡He ubicado el acuerdo **${cod}** en el registro comunal!`;
+    let detalle = `¡He ubicado el acuerdo ${cod} en el registro comunal!`;
     if (pedidoRelacionado) {
       const est =
         pedidoRelacionado.estado === 'pending'
@@ -177,7 +177,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
           ? 'Finalizado y entregado'
           : pedidoRelacionado.estado;
       const contra = pedidoRelacionado.rol === 'comerciante' ? `Cliente: ${pedidoRelacionado.contraparte}` : `Taller: ${pedidoRelacionado.contraparte}`;
-      detalle += `\n• **Trabajo:** ${pedidoRelacionado.titulo}\n• **${contra}**\n• **Estado:** ${est}\n• **Valor:** $ ${Number(pedidoRelacionado.monto).toLocaleString('es-CO')} COP`;
+      detalle += `\n• Trabajo: ${pedidoRelacionado.titulo}\n• ${contra}\n• Estado: ${est}\n• Valor: $ ${Number(pedidoRelacionado.monto).toLocaleString('es-CO')} COP`;
     }
 
     return {
@@ -226,7 +226,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
               ? 'Finalizado'
               : p.estado;
           const contra = p.rol === 'comerciante' ? `Cliente: ${p.contraparte}` : `Taller: ${p.contraparte}`;
-          return `${idx + 1}. **#${p.codigo}** — "${p.titulo}" (${contra}) • **Estado:** ${est} • **Valor:** $ ${Number(p.monto).toLocaleString('es-CO')}`;
+          return `${idx + 1}. #${p.codigo} — "${p.titulo}" (${contra}) • Estado: ${est} • Valor: $ ${Number(p.monto).toLocaleString('es-CO')} COP`;
         })
         .join('\n');
 
@@ -818,6 +818,8 @@ REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
    - El anticipo máximo legal es del 50%. Si alguien solicita más, corrígelo con amabilidad.
    - Si el usuario pregunta por sus pedidos, acuerdos o cómo va su trabajo, respóndele con los datos REALES de la lista de pedidos de arriba con su código (#CC-...) y estado actual.
    - Si el usuario menciona un código de verificación (como CC-93E416) o pide verificar un pacto, bríndale la información y asigna siempre "tipo": "navegacion" y "rutaNavegacion": "/trato-seguro/verificar/" + codigo.
+4. REGLA ESTRICTA DE FORMATO:
+   - Redacta siempre en texto limpio, cercano y natural. NO uses asteriscos (** ni *) para resaltar palabras; usa mayúsculas iniciales, comillas o viñetas limpias (•).
 
 REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
 1. NAVEGACIÓN Y MAPA:
