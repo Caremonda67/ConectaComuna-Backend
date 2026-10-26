@@ -29,7 +29,12 @@ app.use(
       // Peticiones sin origin (como apps móviles, curl o pruebas locales)
       if (!origin) return callback(null, true);
       const origenLimpio = origin.replace(/\/$/, "");
-      if (origenesPermitidos.has(origenLimpio)) {
+      if (
+        origenesPermitidos.has(origenLimpio) ||
+        origenLimpio.includes("vercel.app") ||
+        /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(origenLimpio) ||
+        process.env.NODE_ENV !== "production"
+      ) {
         return callback(null, true);
       }
       return callback(new Error("Origen no permitido por política CORS"));
