@@ -11,6 +11,24 @@ const CENTRO_COMUNA_DEFAULT = {
 };
 
 /**
+ * Normaliza y describe la ubicación de forma humana para evitar frases como "en Mi ubicación".
+ */
+function describirUbicacion(barrio) {
+  if (!barrio || barrio.toLowerCase().includes("ubicación") || barrio.toLowerCase().includes("ubicacion")) {
+    return {
+      cercaDe: "cerca de tu ubicación actual en la comuna",
+      enBarrio: "tu zona en la comuna",
+      etiquetaCorta: "Cerca de ti",
+    };
+  }
+  return {
+    cercaDe: `cerca del barrio ${barrio}`,
+    enBarrio: `el barrio ${barrio}`,
+    etiquetaCorta: `Barrio ${barrio}`,
+  };
+}
+
+/**
  * Calcula distancia aproximada en metros entre dos coordenadas (Haversine simple).
  */
 function calcularDistanciaMetros(lat1, lon1, lat2, lon2) {
@@ -37,7 +55,7 @@ async function obtenerNegociosComuna() {
       .from("businesses")
       .select("id, name, description, category, neighborhood, address, phone, whatsapp, lat, lng, rating_avg, verification_status, wholesale_enabled, services_catalog")
       .eq("is_active", true)
-      .limit(20);
+      .limit(25);
 
     if (error) {
       console.warn("No se pudieron cargar negocios para el asistente:", error.message);
@@ -51,14 +69,15 @@ async function obtenerNegociosComuna() {
 }
 
 /**
- * Motor de respaldo local en caso de que no haya API key de Gemini configurada
- * o falle la conexión exterior. Garantiza que la app nunca se rompa.
+ * Motor local inteligente y con memoria de contexto multi-turno.
+ * Garantiza respuestas naturales y útiles sin importar si hay conexión a APIs de terceros.
  */
-function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios) {
+function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = []) {
   const texto = mensaje.toLowerCase().trim();
   const barrio = ubicacionUsuario?.barrio || CENTRO_COMUNA_DEFAULT.barrio;
   const lat = ubicacionUsuario?.lat || CENTRO_COMUNA_DEFAULT.lat;
   const lng = ubicacionUsuario?.lng || CENTRO_COMUNA_DEFAULT.lng;
+  const descUbi = describirUbicacion(barrio);
 
   // Filtrado de negocios con cálculo de distancia
   const negociosConDistancia = negocios.map((n) => ({
@@ -66,44 +85,139 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios) {
     distanciaMetros: calcularDistanciaMetros(lat, lng, n.lat, n.lng),
   })).sort((a, b) => (a.distanciaMetros || 999999) - (b.distanciaMetros || 999999));
 
-  // 1. Duda de Trato Seguro
-  if (texto.includes("trato seguro") || texto.includes("anticipo") || texto.includes("garantia")) {
+  // Último mensaje del asistente para contexto
+  const mensajesBot = historial.filter((h) => h.rol === "model");
+  const ultimoMensajeBot = mensajesBot.length > 0 ? mensajesBot[mensajesBot.length - 1].texto.toLowerCase() : "";
+
+  // 1. Petición para aprender a dictar o iniciar el dictado (NO crear servicio de mentiras)
+  const esPeticionDictado =
+    texto.includes("dictar mi servicio") ||
+    texto.includes("cómo dicto") ||
+    texto.includes("como dicto") ||
+    texto.includes("quiero dictar") ||
+    texto.includes("dictar un servicio") ||
+    texto.includes("dictar servicio") ||
+    texto.includes("cómo publicar") ||
+    texto.includes("como publicar");
+
+  if (esPeticionDictado) {
     return {
-      mensaje: `¡Hola vecino! El Trato Seguro Comunal es el pacto de confianza de nuestro barrio:
-1. Ningún anticipo para materiales puede superar el 50% del total acordado.
-2. Todo queda registrado por escrito con código de verificación.
-3. Si surge algún desacuerdo, cuentas con mediación vecinal comunitaria antes de cualquier conflicto.`,
+      mensaje: `¡Listo vecino! Estoy listo para escucharte. Puedes tocar el botón del micrófono 🎙️ que está aquí abajo o escribirme en una sola frase qué haces y cuánto cobras.\n\nPor ejemplo:\n• "Hago arreglos de pantalones, dobladillos y costuras a 15 mil pesos"\n• "Cambio guardas, chapas y candados a domicilio a 30 mil"\n• "Corte de cabello para caballero y barbería a 18 mil"\n\n¿Qué oficio o servicio quieres registrar hoy?`,
       tipo: "conversacion",
-      sugerencias: ["¿Cómo pedir un servicio?", "¿Qué es el facilitador?", "Ver negocios cercanos"],
+      sugerencias: [
+        "Hago arreglos de ropa a $15.000",
+        "Cambio cerraduras a $30.000",
+        "Corte de cabello a $18.000",
+      ],
     };
   }
 
-  // 2. Duda de Facilitador
+  // 2. Intención de cambiar el precio
+  const esPeticionCambiarPrecio =
+    texto === "cambiar el precio" ||
+    texto.includes("cambiar el precio") ||
+    texto.includes("cambiar precio") ||
+    texto.includes("modificar precio") ||
+    texto.includes("ajustar precio") ||
+    texto.includes("otro precio") ||
+    texto.includes("cambiar valor");
+
+  if (esPeticionCambiarPrecio) {
+    return {
+      mensaje: `¿A qué valor deseas cambiar el precio de tu servicio? Dime el nuevo monto (por ejemplo: "30 mil pesos") o toca uno de los valores rápidos:`,
+      tipo: "conversacion",
+      sugerencias: ["$15.000", "$20.000", "$30.000", "$40.000"],
+    };
+  }
+
+  // 3. Respuesta con un nuevo monto tras pedir cambio de precio
+  const precioSoloMatch = texto.match(/\b(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:mil|pesos|\$)?\b/);
+  const contextoPrevioPidePrecio =
+    ultimoMensajeBot.includes("precio") ||
+    ultimoMensajeBot.includes("monto") ||
+    ultimoMensajeBot.includes("valor") ||
+    ultimoMensajeBot.includes("servicio identificado");
+
+  if (precioSoloMatch && contextoPrevioPidePrecio && !texto.includes("vendo") && !texto.includes("hago")) {
+    const num = parseInt(precioSoloMatch[1].replace(/\./g, ""), 10);
+    const nuevoPrecio = num < 1000 ? num * 1000 : num;
+
+    return {
+      mensaje: `¡Precio actualizado a $${nuevoPrecio.toLocaleString("es-CO")} COP! He guardado este cambio en la ficha. Cuando quieras puedes guardarlo en tu catálogo:`,
+      tipo: "servicio_catalogo",
+      servicio: {
+        titulo: "Servicio de oficio comunal",
+        descripcion: "Tarifa ajustada según solicitud",
+        precioSugerido: nuevoPrecio,
+        categoria: "costura",
+      },
+      sugerencias: ["Guardar en mi catálogo", "Cambiar el precio", "¿Cómo funciona el anticipo?"],
+    };
+  }
+
+  // 4. Intención de guardar en el catálogo
+  const esPeticionGuardar =
+    texto === "guardar en mi catálogo" ||
+    texto === "guardar en mi catalogo" ||
+    texto.includes("cómo guardo") ||
+    texto.includes("como guardo") ||
+    texto.includes("publicar en catálogo");
+
+  if (esPeticionGuardar) {
+    return {
+      mensaje: `Para publicar este servicio en la plataforma:\n1. Si ya tienes tu cuenta de negocio, solo toca el botón verde "Guardar directamente en mi catálogo" que aparece en la tarjeta de arriba.\n2. Si aún no te has registrado como emprendedor, toca el botón para crear tu perfil gratis en 1 minuto. Así tu taller quedará visible para todos los vecinos.`,
+      tipo: "conversacion",
+      sugerencias: ["Crear negocio para publicar", "Ver oficios cercanos", "¿Cómo funciona el Trato Seguro?"],
+    };
+  }
+
+  // 5. Trato Seguro
+  if (texto.includes("trato seguro") || texto.includes("anticipo") || texto.includes("garantia") || texto.includes("50%")) {
+    return {
+      mensaje: `¡Hola vecino! El Trato Seguro Comunal es el pacto de confianza de nuestro barrio:\n1. Ningún anticipo para compra de materiales puede superar el 50% del total acordado.\n2. Todo queda registrado por escrito con código de verificación oficial.\n3. Si surge algún desacuerdo, cuentas con mediación vecinal comunitaria antes de cualquier conflicto.`,
+      tipo: "conversacion",
+      sugerencias: ["¿Cómo pedir un servicio?", "¿Qué es el facilitador?", "Ver oficios cercanos"],
+    };
+  }
+
+  // 6. Facilitador Comunitario
   if (texto.includes("facilitador") || texto.includes("apadrinar") || texto.includes("nieto") || texto.includes("ayuda digital")) {
     return {
-      mensaje: `El Facilitador Comunitario es un familiar o vecino joven de confianza que ayuda a los adultos mayores o artesanos a gestionar su catálogo y fotos. En el panel de negocio encuentras un código de 6 letras para vincularlo de inmediato.`,
+      mensaje: `El Facilitador Comunitario es un familiar o vecino joven de confianza que apoya a los adultos mayores o artesanos a gestionar su catálogo y fotos. En el panel de negocio encuentras un código de 6 letras para vincularlo de inmediato.`,
       tipo: "conversacion",
       sugerencias: ["¿Cómo registrarme?", "¿Cómo funciona el Trato Seguro?"],
     };
   }
 
-  // 3. Intención de publicar o dictar un servicio (Emprendedor)
-  const esDictado =
+  // 7. Dictado real de un oficio por parte del usuario (contiene acción + oficio/monto)
+  const contieneAccionOficio =
     texto.includes("vendo") ||
     texto.includes("hago") ||
     texto.includes("ofrezco") ||
     texto.includes("cobro") ||
-    texto.includes("publicar") ||
-    texto.includes("mi servicio") ||
-    texto.includes("mi catalogo") ||
-    texto.includes("mi catálogo") ||
-    texto.includes("dictar");
+    texto.includes("arreglo") ||
+    texto.includes("reparo") ||
+    texto.includes("confecciono") ||
+    texto.includes("cambio chapas") ||
+    texto.includes("corte de");
 
-  if (esDictado) {
-    const precioMatch = texto.match(/\b(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:mil|pesos|\$)?\b/);
+  const contieneOficioOMonto =
+    texto.includes("vestido") ||
+    texto.includes("pantalon") ||
+    texto.includes("ropa") ||
+    texto.includes("chapa") ||
+    texto.includes("llave") ||
+    texto.includes("celular") ||
+    texto.includes("corte") ||
+    texto.includes("comida") ||
+    texto.includes("pesos") ||
+    texto.includes("mil") ||
+    texto.includes("$");
+
+  if (contieneAccionOficio && contieneOficioOMonto && !esPeticionDictado) {
     let precio = 20000;
-    if (precioMatch) {
-      const num = parseInt(precioMatch[1].replace(/\./g, ""), 10);
+    if (precioSoloMatch) {
+      const num = parseInt(precioSoloMatch[1].replace(/\./g, ""), 10);
       precio = num < 1000 ? num * 1000 : num;
     }
 
@@ -120,19 +234,22 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios) {
     ) {
       categoria = "costura";
       titulo = "Confección y arreglo de prendas";
-    } else if (texto.includes("chapa") || texto.includes("llave") || texto.includes("candado")) {
+    } else if (texto.includes("chapa") || texto.includes("llave") || texto.includes("candado") || texto.includes("cerradura")) {
       categoria = "cerrajeria";
       titulo = "Servicio de cerrajería y aperturas";
     } else if (texto.includes("celular") || texto.includes("pantalla") || texto.includes("computador") || texto.includes("tecnolog")) {
       categoria = "tecnologia";
       titulo = "Mantenimiento y arreglo técnico";
-    } else if (texto.includes("barber") || texto.includes("corte") || texto.includes("unas") || texto.includes("manicure")) {
+    } else if (texto.includes("barber") || texto.includes("corte") || texto.includes("unas") || texto.includes("uñas") || texto.includes("manicure")) {
       categoria = "belleza";
       titulo = "Cuidado personal y estética barrial";
+    } else if (texto.includes("comida") || texto.includes("almuerzo") || texto.includes("empanada")) {
+      categoria = "comida";
+      titulo = "Preparación de alimentos caseros";
     }
 
     return {
-      mensaje: `¡Qué buen oficio! He estructurado tu servicio para que los vecinos de ${barrio} se enteren de inmediato. Revisa los datos y puedes publicarlo con un solo toque:`,
+      mensaje: `¡Qué buen oficio! He estructurado tu servicio para los vecinos de ${descUbi.enBarrio}. Revisa los datos y puedes guardarlo en tu catálogo con un solo toque:`,
       tipo: "servicio_catalogo",
       servicio: {
         titulo,
@@ -144,28 +261,62 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios) {
     };
   }
 
-  // 4. Búsqueda de negocios (por palabra clave de categoría)
-  let coincidencias = [];
-  if (texto.includes("costura") || texto.includes("falda") || texto.includes("pantalon") || texto.includes("dobladillo") || texto.includes("uniforme")) {
-    coincidencias = negociosConDistancia.filter((n) => n.category === "costura");
-  } else if (texto.includes("chapa") || texto.includes("llave") || texto.includes("cerrajero") || texto.includes("candado")) {
-    coincidencias = negociosConDistancia.filter((n) => n.category === "cerrajeria");
-  } else if (texto.includes("barber") || texto.includes("corte") || texto.includes("peluquer") || texto.includes("pelo") || texto.includes("unas") || texto.includes("manicure")) {
-    coincidencias = negociosConDistancia.filter((n) => n.category === "belleza" || n.category === "manicure");
-  } else if (texto.includes("comida") || texto.includes("cholado") || texto.includes("almuerzo") || texto.includes("empanada")) {
-    coincidencias = negociosConDistancia.filter((n) => n.category === "comida" || n.category === "ambulante");
-  } else if (texto.includes("arreglo") || texto.includes("tecnologia") || texto.includes("celular") || texto.includes("lavadora")) {
-    coincidencias = negociosConDistancia.filter((n) => n.category === "tecnologia");
-  } else {
-    // Si no especifica oficio, sugerimos los más cercanos al barrio activo
-    coincidencias = negociosConDistancia.slice(0, 3);
-  }
+  // 8. Búsqueda explícita de negocios u oficios
+  const esBusqueda =
+    texto.includes("costura") ||
+    texto.includes("modista") ||
+    texto.includes("falda") ||
+    texto.includes("pantalon") ||
+    texto.includes("cerrajero") ||
+    texto.includes("cerrajeria") ||
+    texto.includes("chapa") ||
+    texto.includes("llave") ||
+    texto.includes("candado") ||
+    texto.includes("barber") ||
+    texto.includes("peluquer") ||
+    texto.includes("corte") ||
+    texto.includes("manicure") ||
+    texto.includes("unas") ||
+    texto.includes("uñas") ||
+    texto.includes("comida") ||
+    texto.includes("almuerzo") ||
+    texto.includes("empanada") ||
+    texto.includes("cholado") ||
+    texto.includes("celular") ||
+    texto.includes("computador") ||
+    texto.includes("tecnologia") ||
+    texto.includes("cerca") ||
+    texto.includes("oficios") ||
+    texto.includes("negocios") ||
+    texto.includes("buscar") ||
+    texto.includes("dónde encuentro") ||
+    texto.includes("quién arregla");
 
-  if (coincidencias.length > 0) {
+  if (esBusqueda) {
+    let coincidencias = [];
+    if (texto.includes("costura") || texto.includes("modista") || texto.includes("falda") || texto.includes("pantalon") || texto.includes("dobladillo")) {
+      coincidencias = negociosConDistancia.filter((n) => n.category === "costura");
+    } else if (texto.includes("chapa") || texto.includes("llave") || texto.includes("cerrajero") || texto.includes("candado")) {
+      coincidencias = negociosConDistancia.filter((n) => n.category === "cerrajeria");
+    } else if (texto.includes("barber") || texto.includes("corte") || texto.includes("peluquer") || texto.includes("unas") || texto.includes("manicure")) {
+      coincidencias = negociosConDistancia.filter((n) => n.category === "belleza" || n.category === "manicure");
+    } else if (texto.includes("comida") || texto.includes("cholado") || texto.includes("almuerzo") || texto.includes("empanada")) {
+      coincidencias = negociosConDistancia.filter((n) => n.category === "comida" || n.category === "ambulante");
+    } else if (texto.includes("celular") || texto.includes("computador") || texto.includes("tecnologia") || texto.includes("reparaci")) {
+      coincidencias = negociosConDistancia.filter((n) => n.category === "tecnologia");
+    } else {
+      coincidencias = negociosConDistancia.slice(0, 3);
+    }
+
+    if (coincidencias.length === 0) {
+      coincidencias = negociosConDistancia.slice(0, 3);
+    }
+
     const primerNegocio = coincidencias[0];
-    const distTexto = primerNegocio.distanciaMetros ? `a unos ${primerNegocio.distanciaMetros} metros` : `en ${primerNegocio.neighborhood || barrio}`;
+    const distTexto = primerNegocio?.distanciaMetros ? `(como ${primerNegocio.name} a unos ${primerNegocio.distanciaMetros} metros)` : "";
+
     return {
-      mensaje: `Vecino, tomando en cuenta que te encuentras en ${barrio}, te encontré estas opciones de confianza cerca de ti (como ${primerNegocio.name} ${distTexto}):`,
+      mensaje: `Vecino, revisando los oficios ${descUbi.cercaDe}, te encontré estas opciones de confianza ${distTexto}:`,
       tipo: "negocios",
       negociosSugeridos: coincidencias.slice(0, 3).map((n) => ({
         id: n.id,
@@ -180,18 +331,19 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios) {
     };
   }
 
-  // Respuesta general de orientación
+  // 9. Saludo o mensaje general (Orientación cálida sin recomendar negocios al azar)
   return {
-    mensaje: `¡Hola vecino de ${barrio}! Soy tu Asistente Comunal. Puedo ayudarte a encontrar oficios de confianza cerca de tu casa, explicarte cómo te protege el Trato Seguro, o ayudarte a publicar tus propios servicios dictándomelos con tu voz. ¿En qué te colaboro hoy?`,
+    mensaje: `¡Hola vecino! Soy tu Asistente Comunal para ${descUbi.enBarrio}. Estoy aquí para ayudarte a:\n• 📍 Encontrar oficios de confianza cerca de tu ubicación actual.\n• 🎙️ Dictar y publicar tus servicios con la voz para tu catálogo.\n• 🛡️ Explicarte el Trato Seguro y las garantías vecinales.\n\n¿En qué te colaboro hoy?`,
     tipo: "conversacion",
-    sugerencias: ["¿Quién arregla ropa?", "¿Cerrajería de confianza?", "¿Cómo funciona el Trato Seguro?"],
+    sugerencias: ["Oficios cerca de mí", "🎙️ Dictar mi servicio para el catálogo", "¿Cómo funciona el Trato Seguro?"],
   };
 }
 
 /**
- * Prompt del sistema con toda la base de conocimiento de ConectaComuna.
+ * Prompt del sistema con toda la base de conocimiento de ConectaComuna para Gemini.
  */
 function construirPromptSistema(negocios, barrioUsuario, lat, lng) {
+  const descUbi = describirUbicacion(barrioUsuario);
   const listaNegocios = negocios
     .map(
       (n) =>
@@ -199,18 +351,24 @@ function construirPromptSistema(negocios, barrioUsuario, lat, lng) {
     )
     .join("\n");
 
-  return `Eres el "Asistente Comunal de ConectaComuna", un copiloto barrial para los habitantes y emprendedores de la Comuna en Cali, Colombia.
+  return `Eres el "Asistente Comunal de ConectaComuna", un copiloto barrial para los habitantes y micro-emprendedores de la Comuna en Cali, Colombia.
 Tu tono es humano, cálido, respetuoso, solidario y sin tecnicismos ("vecino", "vecina", trato amable colombiano/caleño).
 
 INFORMACIÓN DEL USUARIO ACTUAL:
-- Ubicación activa del usuario: Barrio "${barrioUsuario}" (Coordenadas aprox: ${lat}, ${lng}).
-- REGLA DE ORO DE UBICACIÓN: Si el usuario no menciona explícitamente en qué barrio o lugar está, asume automáticamente que está en "${barrioUsuario}" y prioriza los negocios de este barrio o los más cercanos.
+- Ubicación activa del usuario: ${descUbi.enBarrio} (Coordenadas aprox: ${lat}, ${lng}).
+- REGLA ESTRICTA DE REDACCIÓN DE UBICACIÓN: NUNCA digas "en Mi ubicación" ni "en tu ubicación". En su lugar, di siempre "${descUbi.cercaDe}" o "${descUbi.enBarrio}".
 
-CONOCIMIENTO FUNDAMENTAL DE LA PLATAFORMA:
-1. ConectaComuna es un directorio web gratuito y solidario de oficios locales (costureras, cerrajeros, mecánicos, artesanos, comida casera, barberías).
-2. TRATO SEGURO COMUNAL: Es el acuerdo de palabra respaldado por la comunidad. La regla principal es que los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total. Todo queda registrado con código de comprobante oficial imprimible y mediación vecinal.
-3. FACILITADOR COMUNITARIO: Apoyo solidario para adultos mayores o personas con barreras tecnológicas. Un familiar o vecino joven se vincula con un código de 6 letras para ayudarles a subir fotos y actualizar catálogo.
-4. GRATUIDAD Y LEY: ConectaComuna opera como portal de contacto comunitario conforme al Art. 53 de la Ley 1480 de 2011 (Estatuto del Consumidor). Publicar no tiene ningún costo.
+REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
+1. DICTADO DE SERVICIOS:
+   - Si el usuario dice "dictar mi servicio" o pregunta cómo dictar, NO crees una tarjeta de servicio falsa. Explícale con entusiasmo que toque el botón del micrófono o escriba qué hace y cuánto cobra, y dale 2 ejemplos claros.
+   - Solo genera tipo: "servicio_catalogo" cuando el usuario REALMENTE describa su oficio o producto con detalles y precio.
+2. CAMBIO DE PRECIO:
+   - Si el usuario dice "Cambiar el precio", NO recomiendes negocios. Pregúntale a qué nuevo valor desea ajustarlo.
+   - Si el usuario responde con un número o precio, actualiza el servicio con el nuevo precio y devuelve tipo: "servicio_catalogo".
+3. TRATO SEGURO COMUNAL:
+   - Los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total acordado. Todo queda registrado con código de comprobante oficial y mediación comunitaria.
+4. BÚSQUEDA DE OFICIOS:
+   - Recomienda negocios existentes de la lista priorizando cercanía solo cuando el usuario busque un oficio o pregunte qué hay cerca.
 
 NEGOCIOS ACTIVOS EN LA COMUNA:
 ${listaNegocios}
@@ -231,11 +389,7 @@ Debes responder SIEMPRE un único objeto JSON válido con la siguiente estructur
   },
   "rutaNavegacion": "/mapa" | "/explorar" | "/trato-seguro",
   "sugerencias": ["Opción 1 para tocar", "Opción 2"]
-}
-
-Si el emprendedor te dicta un oficio o servicio que quiere vender, extrae el precio, dale una redacción bonita y usa tipo: "servicio_catalogo".
-Si el vecino busca un servicio, recomiéndale los negocios existentes más cercanos y usa tipo: "negocios".
-Si pide ir a alguna sección, usa tipo: "navegacion" y la ruta correspondiente.`;
+}`;
 }
 
 /**
@@ -260,7 +414,12 @@ ruta.post("/chat", async (req, res) => {
 
   // Si no hay API key configurada, responder con el motor local inteligente
   if (!apiKey) {
-    const respuestaLocal = motorRespaldoLocal(mensaje, { barrio: barrioUsuario, lat, lng }, negocios);
+    const respuestaLocal = motorRespaldoLocal(
+      mensaje,
+      { barrio: barrioUsuario, lat, lng },
+      negocios,
+      historial
+    );
     return res.json(respuestaLocal);
   }
 
@@ -268,9 +427,8 @@ ruta.post("/chat", async (req, res) => {
   try {
     const promptSistema = construirPromptSistema(negocios, barrioUsuario, lat, lng);
 
-    // Formatear historial reciente (máximo 4 mensajes previos para rapidez)
     const contenidos = [];
-    const historialFiltrado = historial.slice(-4);
+    const historialFiltrado = historial.slice(-6);
     for (const h of historialFiltrado) {
       contenidos.push({
         role: h.rol === "user" ? "user" : "model",
@@ -301,7 +459,12 @@ ruta.post("/chat", async (req, res) => {
 
     if (!respuestaHttp.ok) {
       console.warn("Gemini API respondió status:", respuestaHttp.status, "Usando motor de respaldo.");
-      const fallback = motorRespaldoLocal(mensaje, { barrio: barrioUsuario, lat, lng }, negocios);
+      const fallback = motorRespaldoLocal(
+        mensaje,
+        { barrio: barrioUsuario, lat, lng },
+        negocios,
+        historial
+      );
       return res.json(fallback);
     }
 
@@ -309,7 +472,12 @@ ruta.post("/chat", async (req, res) => {
     const textoRespuesta = jsonGemini?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!textoRespuesta) {
-      const fallback = motorRespaldoLocal(mensaje, { barrio: barrioUsuario, lat, lng }, negocios);
+      const fallback = motorRespaldoLocal(
+        mensaje,
+        { barrio: barrioUsuario, lat, lng },
+        negocios,
+        historial
+      );
       return res.json(fallback);
     }
 
@@ -317,7 +485,12 @@ ruta.post("/chat", async (req, res) => {
     return res.json(parsed);
   } catch (err) {
     console.error("Error al comunicarse con Gemini:", err.message);
-    const fallback = motorRespaldoLocal(mensaje, { barrio: barrioUsuario, lat, lng }, negocios);
+    const fallback = motorRespaldoLocal(
+      mensaje,
+      { barrio: barrioUsuario, lat, lng },
+      negocios,
+      historial
+    );
     return res.json(fallback);
   }
 });
