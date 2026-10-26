@@ -8,6 +8,7 @@ import rutasBusinesses from "./routes/businesses.js";
 import rutasOrders from "./routes/orders.js";
 import rutasReviews from "./routes/reviews.js";
 import rutasReports from "./routes/reports.js";
+import rutasAi from "./routes/ai.js";
 
 const origenesConfigurados = (process.env.FRONTEND_URL || "")
   .split(",")
@@ -44,6 +45,7 @@ app.use("/api/businesses", rutasBusinesses);
 app.use("/api/orders", rutasOrders);
 app.use("/api/reviews", rutasReviews);
 app.use("/api/reports", rutasReports);
+app.use("/api/ai", rutasAi);
 
 const puerto = process.env.PORT || 4000;
 
