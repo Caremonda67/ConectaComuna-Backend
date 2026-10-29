@@ -4,13 +4,29 @@ import { usuarioDesdePeticion } from "../config/auth.js";
 
 const ruta = Router();
 
+// La moderación la hace el equipo de Conecta Comuna, no cualquiera con el rol
+// facilitador. La lista vive en equipo_conecta y se asigna a mano en Supabase.
+async function esDelEquipo(usuarioId) {
+  const { data, error } = await claveSupabase
+    .from("equipo_conecta")
+    .select("profile_id")
+    .eq("profile_id", usuarioId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("No se pudo comprobar la pertenencia al equipo:", error.message);
+    return false;
+  }
+  return Boolean(data);
+}
+
 // Listar reportes comunitarios
 ruta.get("/", async (req, res) => {
-  const { usuario, account_type, error: authError } = await usuarioDesdePeticion(req);
+  const { usuario, error: authError } = await usuarioDesdePeticion(req);
   if (authError) return res.status(401).json({ error: authError });
 
-  if (account_type !== "facilitador") {
-    return res.status(403).json({ error: "Solo los facilitadores pueden revisar reportes" });
+  if (!(await esDelEquipo(usuario.id))) {
+    return res.status(403).json({ error: "Solo el equipo de Conecta Comuna revisa los reportes" });
   }
 
   const { estado } = req.query;
@@ -56,11 +72,11 @@ ruta.post("/", async (req, res) => {
 
 // Actualizar estado de resolución de un reporte
 ruta.patch("/:id", async (req, res) => {
-  const { usuario, account_type, error: authError } = await usuarioDesdePeticion(req);
+  const { usuario, error: authError } = await usuarioDesdePeticion(req);
   if (authError) return res.status(401).json({ error: authError });
 
-  if (account_type !== "facilitador") {
-    return res.status(403).json({ error: "Solo los facilitadores pueden moderar reportes" });
+  if (!(await esDelEquipo(usuario.id))) {
+    return res.status(403).json({ error: "Solo el equipo de Conecta Comuna modera los reportes" });
   }
 
   const { estado, notas_moderacion } = req.body;
