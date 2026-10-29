@@ -3,37 +3,10 @@ import claveSupabase from "../config/supabase.js";
 
 const ruta = Router();
 
-// Centro de referencia de la comuna (Cali) si el usuario no tiene ubicación definida
-const CENTRO_COMUNA_DEFAULT = {
-  lat: 3.4372,
-  lng: -76.5225,
-  barrio: "Comuna",
-};
-
-const BARRIOS_COORDENADAS = {
-  "antonio nariño": { barrio: "Antonio Nariño", lat: 3.4365, lng: -76.5255 },
-  "antonio narino": { barrio: "Antonio Nariño", lat: 3.4365, lng: -76.5255 },
-  "el rodeo": { barrio: "El Rodeo", lat: 3.4401, lng: -76.5209 },
-  "nueva floresta": { barrio: "Nueva Floresta", lat: 3.4342, lng: -76.5281 },
-  "vallado": { barrio: "Vallado", lat: 3.4140, lng: -76.5050 },
-  "san judas": { barrio: "San Judas", lat: 3.4215, lng: -76.5120 },
-  "ciudad córdoba": { barrio: "Ciudad Córdoba", lat: 3.4180, lng: -76.5080 },
-  "ciudad cordoba": { barrio: "Ciudad Córdoba", lat: 3.4180, lng: -76.5080 },
-  "mariano ramos": { barrio: "Mariano Ramos", lat: 3.4130, lng: -76.5160 },
-  "república de israel": { barrio: "República de Israel", lat: 3.4240, lng: -76.5170 },
-  "republica de israel": { barrio: "República de Israel", lat: 3.4240, lng: -76.5170 },
-};
-
-function detectarBarrioEnTexto(texto) {
-  if (!texto || typeof texto !== "string") return null;
-  const t = texto.toLowerCase();
-  for (const [clave, datos] of Object.entries(BARRIOS_COORDENADAS)) {
-    if (t.includes(clave)) {
-      return datos;
-    }
-  }
-  return null;
-}
+// La ubicación llega resuelta desde el cliente, que la obtiene del GPS o del
+// geocodificador. Aquí no se adivina: el diccionario de barrios que había antes
+// solo conocía ocho barrios de Cali y pisaba la ubicación real de quien
+// escribía desde otra ciudad.
 
 /**
  * Normaliza y describe la ubicación de forma humana para evitar frases como "en Mi ubicación".
@@ -175,44 +148,14 @@ async function obtenerPedidosUsuario(userId, businessId) {
  */
 function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
   const texto = mensaje.toLowerCase().trim();
-  const barrioDetectado = detectarBarrioEnTexto(texto);
   const tieneUbicacionExplicita = !!(
-    barrioDetectado ||
-    (ubicacionUsuario?.esDefinida && ubicacionUsuario?.barrio && ubicacionUsuario.barrio !== "Comuna" && ubicacionUsuario.barrio !== "Cali")
+    ubicacionUsuario?.esDefinida && ubicacionUsuario?.barrio && ubicacionUsuario.barrio !== "Comuna"
   );
 
-  const barrio = barrioDetectado?.barrio || (tieneUbicacionExplicita ? ubicacionUsuario?.barrio : null);
-  const lat = barrioDetectado?.lat || (tieneUbicacionExplicita ? ubicacionUsuario?.lat : null);
-  const lng = barrioDetectado?.lng || (tieneUbicacionExplicita ? ubicacionUsuario?.lng : null);
+  const barrio = tieneUbicacionExplicita ? ubicacionUsuario?.barrio : null;
+  const lat = tieneUbicacionExplicita ? ubicacionUsuario?.lat : null;
+  const lng = tieneUbicacionExplicita ? ubicacionUsuario?.lng : null;
   const descUbi = describirUbicacion(barrio, tieneUbicacionExplicita);
-
-  // 0a. Detección y confirmación explícita al indicar barrio por texto o botón
-  if (barrioDetectado && (texto.includes("estoy") || texto.includes("vivo") || texto.includes("barrio") || texto.startsWith("en ") || texto === barrioDetectado.barrio.toLowerCase())) {
-    const ordenados = negocios.map((n) => ({
-      ...n,
-      distanciaMetros: calcularDistanciaMetros(barrioDetectado.lat, barrioDetectado.lng, n.lat, n.lng),
-    })).sort((a, b) => (a.distanciaMetros || 999999) - (b.distanciaMetros || 999999));
-
-    return {
-      mensaje: `¡Listo vecino! He fijado tu ubicación en el barrio ${barrioDetectado.barrio}. Estos son los oficios más cercanos a tu zona:`,
-      tipo: "negocios",
-      ubicacionDetectada: {
-        barrio: barrioDetectado.barrio,
-        lat: barrioDetectado.lat,
-        lng: barrioDetectado.lng,
-      },
-      negociosSugeridos: ordenados.slice(0, 3).map((n) => ({
-        id: n.id,
-        nombre: n.name,
-        categoria: n.category,
-        barrio: n.neighborhood,
-        whatsapp: n.whatsapp,
-        distanciaMetros: n.distanciaMetros,
-        verificado: n.verification_status === "verified",
-      })),
-      sugerencias: ["Ver en el mapa", "¿Cómo funciona el Trato Seguro?", "Buscar otro oficio"],
-    };
-  }
 
   // 0b. Pregunta por cercanía ("cuál es el comercio más cercano") cuando la ubicación aún no está definida
   const esPreguntaCercania =
@@ -1176,15 +1119,13 @@ ruta.post("/chat", async (req, res) => {
     return res.status(400).json({ error: "El mensaje es obligatorio." });
   }
 
-  const barrioDetectado = detectarBarrioEnTexto(mensaje);
   const tieneUbicacionExplicita = !!(
-    barrioDetectado ||
-    (ubicacion && ubicacion.esDefinida !== false && ubicacion.barrio && ubicacion.barrio !== "Comuna" && ubicacion.barrio !== "Cali")
+    ubicacion && ubicacion.esDefinida !== false && ubicacion.barrio && ubicacion.barrio !== "Comuna"
   );
 
-  const barrioUsuario = barrioDetectado?.barrio || (tieneUbicacionExplicita ? ubicacion?.barrio : null);
-  const lat = barrioDetectado?.lat || (tieneUbicacionExplicita && ubicacion?.lat ? Number(ubicacion.lat) : null);
-  const lng = barrioDetectado?.lng || (tieneUbicacionExplicita && ubicacion?.lng ? Number(ubicacion.lng) : null);
+  const barrioUsuario = tieneUbicacionExplicita ? ubicacion.barrio : null;
+  const lat = tieneUbicacionExplicita && ubicacion.lat ? Number(ubicacion.lat) : null;
+  const lng = tieneUbicacionExplicita && ubicacion.lng ? Number(ubicacion.lng) : null;
 
   // Consultar negocios reales
   const negocios = await obtenerNegociosComuna();
@@ -1224,15 +1165,9 @@ ruta.post("/chat", async (req, res) => {
     textoLimpio.includes("comercio más cercano") ||
     textoLimpio.includes("comercio mas cercano");
 
-  const esFijarBarrioDirecto = !!(
-    barrioDetectado &&
-    (textoLimpio.includes("estoy") || textoLimpio.includes("vivo") || textoLimpio.includes("barrio") || textoLimpio.startsWith("en ") || textoLimpio === barrioDetectado.barrio.toLowerCase())
-  );
-
   const esIntencionDirecta =
     matchCodigoDirecto ||
     esConsultaPedidosDirecta ||
-    esFijarBarrioDirecto ||
     (esPreguntaCercaniaDirecta && !tieneUbicacionExplicita) ||
     textoLimpio === "ver en el mapa" ||
     textoLimpio.includes("en el mapa") ||
