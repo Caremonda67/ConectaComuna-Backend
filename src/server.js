@@ -9,6 +9,7 @@ import rutasOrders from "./routes/orders.js";
 import rutasReviews from "./routes/reviews.js";
 import rutasReports from "./routes/reports.js";
 import rutasAi from "./routes/ai.js";
+import { limiteAsistente, limiteEscritura, limiteGeneral } from "./config/limites.js";
 
 const origenesConfigurados = (process.env.FRONTEND_URL || "")
   .split(",")
@@ -48,13 +49,17 @@ app.use(
 );
 app.use(express.json({ limit: "128kb" }));
 
+// La salud queda fuera del límite: la consulta el health check de Render y el
+// ping que mantiene el servicio despierto.
 app.use("/api", rutasSalud);
-app.use("/api/auth", rutasAuth);
+
+app.use("/api", limiteGeneral);
+app.use("/api/auth", limiteEscritura, rutasAuth);
 app.use("/api/businesses", rutasBusinesses);
 app.use("/api/orders", rutasOrders);
-app.use("/api/reviews", rutasReviews);
-app.use("/api/reports", rutasReports);
-app.use("/api/ai", rutasAi);
+app.use("/api/reviews", limiteEscritura, rutasReviews);
+app.use("/api/reports", limiteEscritura, rutasReports);
+app.use("/api/ai", limiteAsistente, rutasAi);
 
 const puerto = process.env.PORT || 4000;
 
