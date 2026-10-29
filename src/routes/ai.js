@@ -39,18 +39,49 @@ function detectarBarrioEnTexto(texto) {
  * Normaliza y describe la ubicación de forma humana para evitar frases como "en Mi ubicación".
  */
 function describirUbicacion(barrio, esDefinida = true) {
-  if (!esDefinida || !barrio || barrio === "Comuna" || barrio === "Cali" || barrio.toLowerCase().includes("mi ubicación") || barrio.toLowerCase().includes("mi ubicacion")) {
+  if (
+    !esDefinida ||
+    !barrio ||
+    barrio === "Comuna" ||
+    barrio.toLowerCase().includes("mi ubicación") ||
+    barrio.toLowerCase().includes("mi ubicacion")
+  ) {
     return {
-      cercaDe: "en nuestra comuna",
-      enBarrio: "toda nuestra comuna",
+      cercaDe: "en la zona",
+      enBarrio: "tu zona",
       etiquetaCorta: "Comuna",
       esDefinida: false,
     };
   }
+
+  const b = String(barrio).trim();
+  const limpio = b.replace(/^barrio\s+/i, "");
+
+  // Si es un punto en el mapa o coordenadas
+  if (/^punto\s+/i.test(limpio) || /^\(?-?\d+\.\d+/.test(limpio)) {
+    return {
+      cercaDe: "cerca de este punto",
+      enBarrio: "el punto marcado",
+      etiquetaCorta: "Punto en el mapa",
+      esDefinida: true,
+    };
+  }
+
+  // Si tiene ciudad o coma (ej: "Quinta Paredes, Bogotá", "Junín, Cali", "El Poblado, Medellín")
+  if (limpio.includes(",")) {
+    return {
+      cercaDe: `cerca de ${limpio}`,
+      enBarrio: limpio,
+      etiquetaCorta: limpio,
+      esDefinida: true,
+    };
+  }
+
+  // Si es un barrio tradicional
   return {
-    cercaDe: `cerca del barrio ${barrio}`,
-    enBarrio: `el barrio ${barrio}`,
-    etiquetaCorta: `Barrio ${barrio}`,
+    cercaDe: `cerca del barrio ${limpio}`,
+    enBarrio: `el barrio ${limpio}`,
+    etiquetaCorta: limpio,
     esDefinida: true,
   };
 }
@@ -82,7 +113,8 @@ async function obtenerNegociosComuna() {
       .from("businesses")
       .select("id, name, description, category, neighborhood, address, phone, whatsapp, lat, lng, rating_avg, verification_status, wholesale_enabled, services_catalog")
       .eq("is_active", true)
-      .limit(25);
+      .order("created_at", { ascending: false })
+      .limit(50);
 
     if (error) {
       console.warn("No se pudieron cargar negocios para el asistente:", error.message);
@@ -777,6 +809,32 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
     };
   }
 
+  // 13b. Consulta directa de los talleres del piloto territorial en Cali
+  const esPeticionPiloto =
+    texto.includes("comercios del piloto") ||
+    texto.includes("oficios del piloto") ||
+    texto.includes("negocios del piloto") ||
+    texto.includes("piloto en cali") ||
+    texto.includes("piloto de cali");
+
+  if (esPeticionPiloto) {
+    const destacados = negocios.slice(0, 3);
+    return {
+      mensaje: `¡Claro que sí, vecino! Aquí tienes los talleres de la fase piloto territorial en la Comuna de Cali. Puedes consultar sus oficios, coordinar directamente por WhatsApp o pactar con Trato Seguro:`,
+      tipo: "negocios",
+      negociosSugeridos: destacados.map((n) => ({
+        id: n.id,
+        nombre: n.name,
+        categoria: n.category,
+        barrio: n.neighborhood,
+        whatsapp: n.whatsapp,
+        distanciaMetros: null,
+        verificado: n.verification_status === "verified",
+      })),
+      sugerencias: ["Ver en el mapa", "¿Cómo funciona el Trato Seguro?", "🎙️ Dictar mi servicio para el catálogo"],
+    };
+  }
+
   // 14. Búsqueda explícita de negocios u oficios (o "Oficios cerca de mí")
   const esBusqueda =
     texto.includes("costura") ||
@@ -831,7 +889,22 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
     }
 
     const primerNegocio = coincidencias[0];
-    const distTexto = primerNegocio?.distanciaMetros ? `(como ${primerNegocio.name} a unos ${primerNegocio.distanciaMetros} metros)` : "";
+    const estaLejos = primerNegocio?.distanciaMetros && primerNegocio.distanciaMetros > 35000;
+
+    if (estaLejos) {
+      return {
+        mensaje: `Vecino, actualmente estás ubicado en ${descUbi.enBarrio}. Los talleres que tenemos registrados en la plataforma forman parte del piloto territorial en la Comuna de Cali (a unos ${Math.round(primerNegocio.distanciaMetros / 1000)} km de aquí). Puedes explorar los comercios del piloto de Cali para conocer el catálogo y probar el Trato Seguro, o dictarme un oficio para registrar tu taller en esta zona.`,
+        tipo: "conversacion",
+        sugerencias: ["Ver comercios del piloto (Cali)", "🎙️ Dictar mi servicio para el catálogo", "¿Cómo funciona el Trato Seguro?", "Ver en el mapa"],
+      };
+    }
+
+    const distTexto =
+      primerNegocio?.distanciaMetros !== null && primerNegocio?.distanciaMetros !== undefined
+        ? primerNegocio.distanciaMetros < 1000
+          ? `(como ${primerNegocio.name} a unos ${primerNegocio.distanciaMetros} metros)`
+          : `(como ${primerNegocio.name} a unos ${(primerNegocio.distanciaMetros / 1000).toFixed(1)} km)`
+        : "";
 
     return {
       mensaje: `Vecino, revisando los oficios ${descUbi.cercaDe}, te encontré estas opciones de confianza ${distTexto}:`,
@@ -849,7 +922,84 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
     };
   }
 
-  // 15. Saludo o mensaje general (Orientación cálida)
+  // 15. Saludos o preguntas de cortesía
+  const esSaludo =
+    /^(hola|buen[ao]s? (d[ií]as?|tardes?|noches?)|qu[eé] tal|c[oó]mo est[aá]s?|saludos)/i.test(texto) ||
+    texto === "hola" ||
+    texto.startsWith("hola ") ||
+    texto.includes("cómo estás") ||
+    texto.includes("como estas");
+
+  if (esSaludo) {
+    return {
+      mensaje: `¡Hola, vecino! Qué gusto saludarte. Por acá todo muy bien en la comuna, listos para colaborarte en lo que necesites hoy. ¿Buscas algún oficio de confianza o te ayudo con tu negocio?`,
+      tipo: "conversacion",
+      sugerencias: ["Oficios cerca de mí", "🎙️ Dictar mi servicio para el catálogo", "Ver en el mapa"],
+    };
+  }
+
+  // 16. Capacidades y qué puede hacer
+  const esPreguntaCapacidades =
+    /qu[eé] puedes hacer|para qu[eé] sirves|c[oó]mo me puedes ayudar|qu[eé] funciones tienes|qu[eé] haces|en qu[eé] me puedes colaborar/i.test(texto);
+
+  if (esPreguntaCapacidades) {
+    return {
+      mensaje: `¡Con mucho gusto, vecino! Como copiloto comunal de ConectaComuna, puedo colaborarte con:\n\n• 📍 Encontrar oficios de confianza: modistas, cerrajeros, barberías, comidas y arreglos cerca de ${descUbi.enBarrio}.\n• 🎙️ Dictar tus servicios por voz: si tienes un oficio y no tienes tiempo de escribir, me dices qué haces y cuánto cobras para armar tu catálogo.\n• 🛡️ Trato Seguro: acordar trabajos con la regla comunal del 50% de anticipo para compra de repuestos y saldo contra entrega.\n• 🗺️ Mapa de talleres: ubicar los emprendedores de la comuna en el mapa interactivo.\n\n¿Por cuál te gustaría empezar?`,
+      tipo: "conversacion",
+      sugerencias: ["Oficios cerca de mí", "🎙️ Dictar mi servicio para el catálogo", "🛡️ ¿Cómo funciona el Trato Seguro?", "Ver en el mapa"],
+    };
+  }
+
+  // 17. Solicitud de ayuda general
+  const esPedidoAyuda =
+    /^(necesito ayuda|ayuda|ay[uú]dame|auxilio|no s[eé] qu[eé] hacer|no entiendo|orientaci[oó]n)/i.test(texto) ||
+    texto === "necesito ayuda" ||
+    texto === "ayuda";
+
+  if (esPedidoAyuda) {
+    return {
+      mensaje: `¡Tranquilo, vecino! Aquí estamos para darte una mano. Cuéntame qué necesitas o elige una de estas opciones:\n\n1. 🔍 Buscar a alguien de confianza (costura, arreglo, cerrajería, comida).\n2. 🎙️ Publicar tu propio oficio o negocio en el catálogo comunal.\n3. 🛡️ Consultar el estado de tus pedidos o cómo funciona el Trato Seguro.\n\n¿Cuál de estas necesitas?`,
+      tipo: "conversacion",
+      sugerencias: ["Oficios cerca de mí", "🎙️ Dictar mi servicio para el catálogo", "¿Cómo funciona el Trato Seguro?"],
+    };
+  }
+
+  // 18. Agradecimiento
+  const esAgradecimiento =
+    /^(gracias|muchas gracias|mil gracias|vale gracias|te lo agradezco|listo gracias|ok gracias)/i.test(texto) ||
+    texto === "gracias" ||
+    texto.startsWith("gracias ");
+
+  if (esAgradecimiento) {
+    return {
+      mensaje: `¡Con el mayor de los gustos, vecino! Para eso estamos en la comuna: apoyarnos entre vecinos y mover los oficios de nuestro barrio. Si necesitas algo más, aquí estaré.`,
+      tipo: "conversacion",
+      sugerencias: ["Buscar otro oficio", "Ver en el mapa", "¿Cómo funciona el Trato Seguro?"],
+    };
+  }
+
+  // 19. Pregunta de identidad
+  const esPreguntaIdentidad =
+    /qui[eé]n eres|quien eres|eres un robot|eres una ia|eres un bot/i.test(texto);
+
+  if (esPreguntaIdentidad) {
+    return {
+      mensaje: `Soy el Asistente Comunal de ConectaComuna, tu copiloto barrial para los habitantes y artesanos de la comuna en Cali. Te ayudo a encontrar oficios cercanos, pactar trabajos seguros con el 50% de anticipo y publicar tus servicios con la voz.`,
+      tipo: "conversacion",
+      sugerencias: ["Oficios cerca de mí", "🎙️ Dictar mi servicio para el catálogo", "Ver en el mapa"],
+    };
+  }
+
+  // 20. Mensaje conversacional de seguimiento (cuando ya hay historial)
+  if (historial && historial.length > 0) {
+    return {
+      mensaje: `Te escucho con atención, vecino. Cuéntame un poco más de lo que necesitas (por ejemplo: el tipo de arreglo, oficio o duda que tengas) y con gusto te oriento de inmediato.`,
+      tipo: "conversacion",
+      sugerencias: ["Oficios cerca de mí", "🎙️ Dictar mi servicio para el catálogo", "Ver en el mapa"],
+    };
+  }
+
+  // 21. Saludo inicial de bienvenida (solo cuando se inicia la conversación)
   return {
     mensaje: `¡Hola vecino! Soy tu Asistente Comunal para ${descUbi.enBarrio}. Estoy aquí para ayudarte a:\n• 📍 Encontrar oficios de confianza cerca de tu ubicación actual.\n• 🎙️ Dictar y publicar tus servicios con la voz para tu catálogo.\n• 🛡️ Explicarte el Trato Seguro y las garantías vecinales.\n\n¿En qué te colaboro hoy?`,
     tipo: "conversacion",
@@ -945,6 +1095,14 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
    - Los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total acordado. Todo queda registrado con código de comprobante oficial y mediación comunitaria.
 5. BÚSQUEDA DE OFICIOS:
    - Recomienda negocios existentes de la lista priorizando cercanía solo cuando el usuario busque un oficio o pregunte qué hay cerca.
+6. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
+   - ConectaComuna es un proyecto de inclusión y bienestar social cuyo piloto territorial inicial opera en la Comuna de Cali (barrios Nueva Floresta, El Rodeo, Antonio Nariño, Vallado, etc.).
+   - Si la ubicación del usuario (${descUbi.enBarrio}) está fuera de Cali (por ejemplo en Bogotá, Medellín, Barranquilla, o si el usuario o jurado menciona Bogotá o Fedesoft):
+     • Reconoce su ubicación real (${descUbi.enBarrio}) con respeto, calidez y naturalidad.
+     • Explícale con amabilidad y orgullo que la plataforma está operando en su fase piloto territorial en la Comuna de Cali con talleres y artesanos reales comunitarios, por lo que en ${descUbi.enBarrio} aún no tenemos talleres en base de datos.
+     • Resalta que la plataforma está diseñada para escalar modularmente a Bogotá y cualquier otra comuna de Colombia.
+     • Invítalo a explorar los oficios del piloto de Cali con el botón "Ver comercios del piloto (Cali)" para comprobar cómo funciona el directorio y el Trato Seguro, o a dictar su propio oficio para registrarlo en su zona.
+     • JAMÁS digas que un taller de Cali queda a 300 km "cerca de Bogotá" ni inventes talleres falsos en Bogotá.
 
 NEGOCIOS ACTIVOS EN LA COMUNA:
 ${listaNegocios}
@@ -966,6 +1124,45 @@ Debes responder SIEMPRE un único objeto JSON válido con la siguiente estructur
   "rutaNavegacion": "/mapa" | "/explorar" | "/registro?tipo=business",
   "sugerencias": ["Opción 1 para tocar", "Opción 2"]
 }`;
+}
+
+/**
+ * Extrae y parsea un objeto JSON válido desde el texto generado por Gemini,
+ * limpiando bloques markdown (```json ... ```) si es necesario.
+ */
+function extraerJsonValido(texto) {
+  if (!texto || typeof texto !== "string") return null;
+  const textoLimpio = texto.trim();
+
+  // Intento 1: Parseo directo
+  try {
+    return JSON.parse(textoLimpio);
+  } catch {
+    // Continuar
+  }
+
+  // Intento 2: Extraer contenido dentro de bloques ```json ... ``` o ``` ... ```
+  const matchBloque = textoLimpio.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (matchBloque && matchBloque[1]) {
+    try {
+      return JSON.parse(matchBloque[1].trim());
+    } catch {
+      // Continuar
+    }
+  }
+
+  // Intento 3: Encontrar llaves de objeto { ... }
+  const inicio = textoLimpio.indexOf("{");
+  const fin = textoLimpio.lastIndexOf("}");
+  if (inicio !== -1 && fin > inicio) {
+    try {
+      return JSON.parse(textoLimpio.slice(inicio, fin + 1));
+    } catch {
+      // Continuar
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1074,7 +1271,7 @@ ruta.post("/chat", async (req, res) => {
     return res.json(respuestaLocal);
   }
 
-  // Para consultas abiertas o conversación natural, usar Gemini 3.5 Flash
+  // Para consultas abiertas o conversación natural, usar cascada de modelos Gemini (3.6 Flash -> 3.5 Flash -> 3.5 Flash Lite)
   try {
     const promptSistema = construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto, tieneUbicacionExplicita);
 
@@ -1091,79 +1288,82 @@ ruta.post("/chat", async (req, res) => {
       parts: [{ text: mensaje }],
     });
 
-    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+    const modelosCandidatos = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"];
+    let parsedResultado = null;
 
-    let respuestaHttp = await fetch(urlGemini, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: promptSistema }],
-        },
-        contents: contenidos,
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: "application/json",
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      }),
-    });
+    for (const modelo of modelosCandidatos) {
+      try {
+        const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
+        const respuestaHttp = await fetch(urlGemini, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(8000),
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [{ text: promptSistema }],
+            },
+            contents: contenidos,
+            generationConfig: {
+              temperature: 0.25,
+              responseMimeType: "application/json",
+            },
+          }),
+        });
 
-    // Fallback rápido a 3.5-flash-lite si 3.5-flash está sobrecargado
-    if (!respuestaHttp.ok) {
-      console.warn("Gemini 3.5-flash status:", respuestaHttp.status, "Probando gemini-3.5-flash-lite...");
-      const urlLite = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`;
-      respuestaHttp = await fetch(urlLite, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [{ text: promptSistema }],
-          },
-          contents: contenidos,
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json",
-          },
-        }),
-      });
+        if (!respuestaHttp.ok) {
+          console.warn(`Gemini modelo ${modelo} respondió status: ${respuestaHttp.status}. Intentando siguiente...`);
+          continue;
+        }
+
+        const jsonGemini = await respuestaHttp.json();
+        const partConTexto = jsonGemini?.candidates?.[0]?.content?.parts?.find(
+          (p) => typeof p.text === "string" && p.text.trim().length > 0
+        );
+        const textoRespuesta = partConTexto?.text || jsonGemini?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (!textoRespuesta) {
+          continue;
+        }
+
+        const jsonExtraido = extraerJsonValido(textoRespuesta);
+        if (jsonExtraido && jsonExtraido.mensaje) {
+          parsedResultado = jsonExtraido;
+          break;
+        } else if (textoRespuesta.trim().length > 0) {
+          // Gemini respondió texto plano conversacional
+          parsedResultado = {
+            mensaje: textoRespuesta.replace(/```(?:json)?/g, "").replace(/```/g, "").trim(),
+            tipo: "conversacion",
+            sugerencias: ["Oficios cerca de mí", "Ver en el mapa", "¿Cómo funciona el Trato Seguro?"],
+          };
+          break;
+        }
+      } catch (errModelo) {
+        console.warn(`Error llamando a ${modelo}: ${errModelo.message}. Probando modelo de respaldo...`);
+      }
     }
 
-    if (!respuestaHttp.ok) {
-      console.warn("Gemini API respondió status:", respuestaHttp.status, "Usando motor de respaldo.");
-      const fallback = motorRespaldoLocal(
-        mensaje,
-        { barrio: barrioUsuario, lat, lng },
-        negocios,
-        historial,
-        contexto
-      );
-      return res.json(fallback);
+    if (parsedResultado) {
+      return res.json(parsedResultado);
     }
 
-    const jsonGemini = await respuestaHttp.json();
-    const textoRespuesta = jsonGemini?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!textoRespuesta) {
-      const fallback = motorRespaldoLocal(
-        mensaje,
-        { barrio: barrioUsuario, lat, lng },
-        negocios,
-        historial,
-        contexto
-      );
-      return res.json(fallback);
-    }
-
-    const parsed = JSON.parse(textoRespuesta);
-    return res.json(parsed);
-  } catch (err) {
-    console.error("Error al comunicarse con Gemini:", err.message);
+    console.warn("Ningún modelo de Gemini respondió con éxito. Usando motor de respaldo local.");
     const fallback = motorRespaldoLocal(
       mensaje,
-      { barrio: barrioUsuario, lat, lng },
+      { barrio: barrioUsuario, lat, lng, esDefinida: tieneUbicacionExplicita },
       negocios,
-      historial
+      historial,
+      contexto
+    );
+    return res.json(fallback);
+  } catch (err) {
+    console.error("Error general al comunicarse con Gemini:", err.message);
+    const fallback = motorRespaldoLocal(
+      mensaje,
+      { barrio: barrioUsuario, lat, lng, esDefinida: tieneUbicacionExplicita },
+      negocios,
+      historial,
+      contexto
     );
     return res.json(fallback);
   }
