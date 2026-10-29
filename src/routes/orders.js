@@ -4,140 +4,130 @@ import { usuarioDesdePeticion } from "../config/auth.js";
 
 const ruta = Router();
 
-// Verificación pública de un pacto de Trato Seguro (sin requerir autenticación)
+// Verificación pública de un pacto de Trato Seguro (sin requerir autenticación).
+// Resuelve la consulta una función de la base, así el QR funciona sin sesión y
+// sin exponer la tabla de pedidos a cualquiera que pruebe códigos.
 ruta.get("/verificar/:codigo", async (req, res) => {
-  const { codigo } = req.params;
-  if (!codigo || typeof codigo !== "string") {
-    return res.status(400).json({ error: "El código de verificación es obligatorio." });
-  }
-
+  const codigo = typeof req.params.codigo === "string" ? req.params.codigo.trim() : "";
   const limpio = codigo.replace(/^#?CC[-_]?/i, "").trim().toLowerCase();
 
+  if (!limpio) {
+    return res.status(400).json({ error: "El código de verificación es obligatorio." });
+  }
+  if (limpio.length > 64 || !/^[a-z0-9-]+$/.test(limpio)) {
+    return res.status(400).json({ error: "El código de verificación no es válido." });
+  }
+
   try {
-    let orderData = null;
+    const semilla = pactoDeDemostracion(limpio);
+    if (semilla) return res.json(semilla);
 
-    // 1. Si es formato UUID completo
-    const esUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(limpio);
-    if (esUuid) {
-      const { data } = await claveSupabase
-        .from("orders")
-        .select("*, business:business_id(id, name, category, phone, neighborhood, verification_status), client:client_id(full_name, phone)")
-        .eq("id", limpio)
-        .maybeSingle();
-      if (data) orderData = data;
+    // El código visible son los 8 primeros caracteres del UUID. Con menos no se
+    // consulta: permitiría barrer los pedidos de la comuna uno por uno.
+    if (limpio.replace(/-/g, "").length < 6) {
+      return res.status(400).json({ error: "El código está incompleto." });
     }
 
-    // 2. Si es prefijo o código corto, buscar en los pedidos recientes
-    if (!orderData) {
-      const { data: lista } = await claveSupabase
-        .from("orders")
-        .select("*, business:business_id(id, name, category, phone, neighborhood, verification_status), client:client_id(full_name, phone)")
-        .order("created_at", { ascending: false })
-        .limit(100);
+    const { data, error } = await claveSupabase.rpc("verificar_pedido_publico", { p_codigo: limpio });
+    if (error) throw error;
 
-      if (Array.isArray(lista)) {
-        orderData = lista.find(
-          (o) => o.id.toLowerCase() === limpio || o.id.toLowerCase().startsWith(limpio)
-        ) || null;
-      }
-    }
-
-    // 3. Fallback de semillas de prueba para jurados/evaluadores (demo2026, demo, ord-1, ord-2, ord-3)
-    if (!orderData && (limpio === "demo2026" || limpio === "demo" || limpio === "ord-1" || limpio === "ord-2" || limpio === "ord-3")) {
-      const isDemo = limpio === "demo2026" || limpio === "demo";
-      orderData = {
-        id: isDemo ? "demo-2026-acuerdo-comunal" : limpio === "ord-1" ? "ord-1-demostracion" : limpio === "ord-2" ? "ord-2-demostracion" : "ord-3-demostracion",
-        title: isDemo
-          ? "Restauración de comedor de madera y cambio de tapizado"
-          : limpio === "ord-1"
-          ? "Manicure semipermanente y cuidado de uñas"
-          : limpio === "ord-2"
-          ? "Arreglo de bastas de 3 pantalones"
-          : "Confección de uniforme escolar",
-        description: isDemo
-          ? "Lijado fino, barniz mate impermeable y retapizado en lino antifluidos para 4 sillas de comedor."
-          : limpio === "ord-1"
-          ? "Servicio a domicilio en Antonio Nariño."
-          : limpio === "ord-2"
-          ? "Ajuste de 5 cm de basta."
-          : "Dos jardineras escolares talla 10.",
-        status: isDemo ? "in_progress" : limpio === "ord-1" ? "pending" : limpio === "ord-2" ? "completed" : "in_progress",
-        created_at: new Date(Date.now() - 86400000).toISOString(),
-        scheduled_for: new Date(Date.now() + 172800000).toISOString(),
-        final_price: isDemo ? 160000 : limpio === "ord-1" ? null : limpio === "ord-2" ? 30000 : 120000,
-        price_estimate: isDemo ? 160000 : limpio === "ord-1" ? 45000 : limpio === "ord-2" ? 30000 : 120000,
-        advance_payment: isDemo ? 80000 : limpio === "ord-1" ? 20000 : limpio === "ord-2" ? 15000 : 60000,
-        service_location_type: isDemo ? "workshop" : limpio === "ord-1" ? "home_delivery" : "workshop",
-        delivery_address: isDemo ? "Calle 44 # 39B-18, Taller La Esperanza" : limpio === "ord-1" ? "Carrera 40 # 42-15" : null,
-        business: {
-          id: isDemo ? "biz-demo-ebanisteria" : limpio === "ord-1" ? "biz-1" : "biz-2",
-          name: isDemo ? "Ebanistería y Restauración Don Carlos" : limpio === "ord-1" ? "Uñas & Belleza Comunal" : "Costuras Doña Marta",
-          category: isDemo ? "arreglos" : limpio === "ord-1" ? "belleza" : "costura",
-          phone: "3187654321",
-          neighborhood: "Antonio Nariño, Comuna 16, Cali",
-          verification_status: "verified",
-        },
-        client: {
-          full_name: isDemo ? "Esperanza Gómez (Vecina)" : "Vecino de la Comuna",
-          phone: "3159876543",
-        },
-      };
-    }
-
-    if (!orderData) {
+    if (!data) {
       return res.status(404).json({ error: "No se encontró ningún pacto registrado con el código indicado." });
     }
 
-    const precio =
-      orderData.final_price != null
-        ? Number(orderData.final_price)
-        : orderData.price_estimate != null
-        ? Number(orderData.price_estimate)
-        : 0;
-    const anticipo = orderData.advance_payment != null ? Number(orderData.advance_payment) : 0;
-    const saldo = Math.max(0, precio - anticipo);
-    const telCliente = orderData.client?.phone ? `...${orderData.client.phone.slice(-4)}` : null;
-
-    const codigoFormateado = (limpio === "demo2026" || limpio === "demo")
-      ? "CC-DEMO2026"
-      : limpio.startsWith("ord-")
-      ? `CC-${limpio.toUpperCase()}`
-      : `CC-${orderData.id.slice(0, 8).toUpperCase()}`;
-
-    res.json({
-      codigo: codigoFormateado,
-      order_id: orderData.id,
-      status: orderData.status,
-      created_at: orderData.created_at,
-      scheduled_for: orderData.scheduled_for,
-      title: orderData.title,
-      description: orderData.description,
-      service_location_type: orderData.service_location_type,
-      delivery_address: orderData.delivery_address,
-      business: {
-        id: orderData.business?.id,
-        name: orderData.business?.name || "Taller Comunal",
-        category: orderData.business?.category || "Oficio",
-        phone: orderData.business?.phone || null,
-        barrio: orderData.business?.neighborhood || "Comuna",
-        is_verified: orderData.business?.verification_status === "verified",
-      },
-      client: {
-        name: orderData.client?.full_name || "Vecino de la Comuna",
-        phone_masked: telCliente,
-      },
-      precio_total: precio,
-      anticipo,
-      saldo_contra_entrega: saldo,
-      porcentaje_anticipo: precio > 0 ? Math.round((anticipo / precio) * 100) : 0,
-      clausula_mediacion:
-        "Pacto respaldado por el Comité de Convivencia y Mediación Comunitaria de la JAC de la Comuna y ConectaComuna.",
-    });
+    res.json(data);
   } catch (err) {
     console.error("Error al verificar pacto de Trato Seguro:", err);
     res.status(500).json({ error: "Error al consultar el pacto de Trato Seguro." });
   }
 });
+
+// Pactos de muestra para las ferias y las pruebas del jurado.
+function pactoDeDemostracion(codigo) {
+  const esDemo = codigo === "demo2026" || codigo === "demo";
+  const esSemilla = esDemo || ["ord-1", "ord-2", "ord-3"].includes(codigo);
+  if (!esSemilla) return null;
+
+  const semillas = {
+    "ord-1": {
+      titulo: "Manicure semipermanente y cuidado de uñas",
+      descripcion: "Servicio a domicilio en Antonio Nariño.",
+      estado: "pending",
+      precio: 45000,
+      anticipo: 20000,
+      modalidad: "home_delivery",
+      direccion: "Carrera 40 # 42-15",
+      negocio: { id: "biz-1", nombre: "Uñas & Belleza Comunal", categoria: "belleza" },
+    },
+    "ord-2": {
+      titulo: "Arreglo de bastas de 3 pantalones",
+      descripcion: "Ajuste de 5 cm de basta.",
+      estado: "completed",
+      precio: 30000,
+      anticipo: 15000,
+      modalidad: "workshop",
+      direccion: null,
+      negocio: { id: "biz-2", nombre: "Costuras Doña Marta", categoria: "costura" },
+    },
+    "ord-3": {
+      titulo: "Confección de uniforme escolar",
+      descripcion: "Dos jardineras escolares talla 10.",
+      estado: "in_progress",
+      precio: 120000,
+      anticipo: 60000,
+      modalidad: "workshop",
+      direccion: null,
+      negocio: { id: "biz-2", nombre: "Costuras Doña Marta", categoria: "costura" },
+    },
+  };
+
+  const base = esDemo
+    ? {
+        titulo: "Restauración de comedor de madera y cambio de tapizado",
+        descripcion:
+          "Lijado fino, barniz mate impermeable y retapizado en lino antifluidos para 4 sillas de comedor.",
+        estado: "in_progress",
+        precio: 160000,
+        anticipo: 80000,
+        modalidad: "workshop",
+        direccion: "Calle 44 # 39B-18, Taller La Esperanza",
+        negocio: { id: "biz-demo-ebanisteria", nombre: "Ebanistería y Restauración Don Carlos", categoria: "arreglos" },
+      }
+    : semillas[codigo];
+
+  const id = esDemo ? "demo-2026-acuerdo-comunal" : `${codigo}-demostracion`;
+  const saldo = Math.max(0, base.precio - base.anticipo);
+
+  return {
+    codigo: esDemo ? "CC-DEMO2026" : `CC-${codigo.toUpperCase()}`,
+    order_id: id,
+    status: base.estado,
+    created_at: new Date(Date.now() - 86400000).toISOString(),
+    scheduled_for: new Date(Date.now() + 172800000).toISOString(),
+    title: base.titulo,
+    description: base.descripcion,
+    service_location_type: base.modalidad,
+    delivery_address: base.direccion,
+    business: {
+      id: base.negocio.id,
+      name: base.negocio.nombre,
+      category: base.negocio.categoria,
+      phone: "3187654321",
+      barrio: "Antonio Nariño, Comuna 16, Cali",
+      is_verified: true,
+    },
+    client: {
+      name: esDemo ? "Esperanza Gómez (Vecina)" : "Vecino de la Comuna",
+      phone_masked: "...6543",
+    },
+    precio_total: base.precio,
+    anticipo: base.anticipo,
+    saldo_contra_entrega: saldo,
+    porcentaje_anticipo: base.precio > 0 ? Math.round((base.anticipo / base.precio) * 100) : 0,
+    clausula_mediacion:
+      "Pacto respaldado por el Comité de Convivencia y Mediación Comunitaria de la JAC de la Comuna y ConectaComuna.",
+  };
+}
 
 // Crear un pedido (requiere login de cliente)
 ruta.post("/", async (req, res) => {
@@ -199,7 +189,7 @@ ruta.post("/", async (req, res) => {
       photos: Array.isArray(photos) ? photos : [],
       status: 'pending'
     })
-    .select()
+    .select("*, business:businesses(id, name, category, photos, phone), client:profiles!orders_client_id_fkey(id, full_name, avatar_url, phone)")
     .single();
 
   if (error) return res.status(500).json({ error: error.message });

@@ -23,6 +23,10 @@ const origenesPermitidos = new Set([
 
 const app = express();
 
+// Render pone un proxy delante: sin esto todos los visitantes comparten la IP
+// del balanceador y los límites por IP se aplicarían al conjunto.
+app.set("trust proxy", 1);
+
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -42,7 +46,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "128kb" }));
 
 app.use("/api", rutasSalud);
 app.use("/api/auth", rutasAuth);
@@ -56,4 +60,24 @@ const puerto = process.env.PORT || 4000;
 
 app.listen(puerto, () => {
   console.log(`API de Conecta Comuna escuchando en el puerto ${puerto}`);
+
+  // En el plan gratuito de Render el servicio entra en reposo tras 15 minutos sin tráfico.
+  // Render inyecta RENDER_EXTERNAL_URL automáticamente en el servicio web.
+  // Enviamos una petición a /api/salud cada 10 minutos para mantener el servicio activo.
+  const urlPublica = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL;
+  if (urlPublica) {
+    const INTERVALO_MS = 10 * 60 * 1000;
+    setInterval(async () => {
+      try {
+        const resp = await fetch(`${urlPublica.replace(/\/$/, "")}/api/salud`, {
+          signal: AbortSignal.timeout(8000),
+        });
+        if (resp.ok) {
+          console.log("Ping de actividad completado:", new Date().toLocaleTimeString("es-CO"));
+        }
+      } catch (err) {
+        console.warn("No se pudo completar el ping de actividad:", err.message);
+      }
+    }, INTERVALO_MS);
+  }
 });
