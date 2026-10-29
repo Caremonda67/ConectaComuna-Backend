@@ -10,6 +10,7 @@ import rutasReviews from "./routes/reviews.js";
 import rutasReports from "./routes/reports.js";
 import rutasAi from "./routes/ai.js";
 import { limiteAsistente, limiteEscritura, limiteGeneral } from "./config/limites.js";
+import { manejadorDeErrores } from "./middleware/errores.js";
 
 const origenesConfigurados = (process.env.FRONTEND_URL || "")
   .split(",")
@@ -21,6 +22,10 @@ const origenesPermitidos = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ]);
+
+// Los previews de Vercel cambian de subdominio en cada despliegue. El patrón va
+// anclado: buscar "vercel.app" suelto también aceptaba vercel.app.atacante.io.
+const esPreviewDeVercel = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.vercel\.app$/i;
 
 const app = express();
 
@@ -36,15 +41,16 @@ app.use(
       const origenLimpio = origin.replace(/\/$/, "");
       if (
         origenesPermitidos.has(origenLimpio) ||
-        origenLimpio.includes("vercel.app") ||
+        esPreviewDeVercel.test(origenLimpio) ||
         /^http:\/\/(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(origenLimpio) ||
         process.env.NODE_ENV !== "production"
       ) {
         return callback(null, true);
       }
-      return callback(new Error("Origen no permitido por política CORS"));
+      // Sin cabecera el navegador bloquea la respuesta. Devolver un error aquí
+      // convertía un rechazo de CORS en un 500.
+      return callback(null, false);
     },
-    credentials: true,
   })
 );
 app.use(express.json({ limit: "128kb" }));
@@ -60,6 +66,21 @@ app.use("/api/orders", rutasOrders);
 app.use("/api/reviews", limiteEscritura, rutasReviews);
 app.use("/api/reports", limiteEscritura, rutasReports);
 app.use("/api/ai", limiteAsistente, rutasAi);
+
+// Lo que no exista responde JSON. El 404 en HTML de Express confunde a quien
+// consume la API desde el navegador.
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "Esa ruta no existe en la API." });
+});
+
+// Último de la cadena. Si una ruta llama next(error), la respuesta sale de aquí.
+app.use(manejadorDeErrores);
+
+// Una promesa rechazada no debería tumbar la API a mitad de una demostración.
+// Se deja el rastro en el log y el proceso sigue atendiendo.
+process.on("unhandledRejection", (motivo) => {
+  console.error("Promesa rechazada sin capturar:", motivo);
+});
 
 const puerto = process.env.PORT || 4000;
 
