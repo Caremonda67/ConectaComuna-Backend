@@ -4,7 +4,9 @@ import { usuarioDesdePeticion } from "../config/auth.js";
 
 const ruta = Router();
 
-const ACCOUNT_TYPES = ["client", "business", "facilitador"];
+// Las cuentas de facilitador las asigna el equipo a mano en equipo_conecta.
+// Por aquí solo entran clientes y negocios.
+const ACCOUNT_TYPES = ["client", "business"];
 
 // Rate limiting simple en memoria por IP para evitar spam de registros
 const registroIntentos = new Map();
@@ -50,7 +52,8 @@ ruta.post("/registro", async (req, res) => {
   const { data, error } = await claveSupabase.auth.admin.createUser({
     email: emailLimpio,
     password,
-    email_confirm: true,
+    // El correo se confirma desde el enlace que manda Supabase, no desde aquí.
+    email_confirm: false,
     user_metadata: { 
       account_type: typeToSet, 
       full_name: typeof full_name === "string" && full_name.trim() ? full_name.trim() : "Vecino",
@@ -59,7 +62,9 @@ ruta.post("/registro", async (req, res) => {
     },
   });
 
-  if (error) return res.status(400).json({ error: error.message });
+  // El mensaje de Supabase dice si el correo ya existe, y eso sirve para
+  // averiguar qué cuentas hay. Al cliente se le responde en genérico.
+  if (error) return res.status(400).json({ error: "No pudimos crear la cuenta con esos datos." });
 
   // No necesitamos insertar en 'profiles' porque el trigger 'handle_new_user' de Supabase lo hace.
   res.status(201).json({ id: data.user.id, email: emailLimpio, account_type: typeToSet });

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import claveSupabase from "../config/supabase.js";
+import { envolver } from "../middleware/errores.js";
 
 const ruta = Router();
 
@@ -95,7 +96,7 @@ function describirUbicacion(barrio, esDefinida = true) {
 /**
  * Calcula distancia aproximada en metros entre dos coordenadas (Haversine simple).
  */
-function calcularDistanciaMetros(lat1, lon1, lat2, lon2) {
+export function calcularDistanciaMetros(lat1, lon1, lat2, lon2) {
   if (!lat1 || !lon1 || !lat2 || !lon2) return null;
   const R = 6371e3; // Radio de la tierra en metros
   const φ1 = (lat1 * Math.PI) / 180;
@@ -129,48 +130,6 @@ async function obtenerNegociosComuna() {
     return data || [];
   } catch (err) {
     console.warn("Excepción al consultar negocios para IA:", err.message);
-    return [];
-  }
-}
-
-/**
- * Consulta pedidos y pactos de Trato Seguro activos del usuario para nutrir el contexto del asistente.
- */
-async function obtenerPedidosUsuario(userId, businessId) {
-  if (!userId && !businessId) return [];
-  try {
-    let query = claveSupabase
-      .from("orders")
-      .select("id, title, status, price_estimate, final_price, advance_payment, business:businesses(name), client:profiles!orders_client_id_fkey(full_name)")
-      .order("created_at", { ascending: false })
-      .limit(6);
-
-    if (businessId && userId) {
-      query = query.or(`client_id.eq.${userId},business_id.eq.${businessId}`);
-    } else if (businessId) {
-      query = query.eq("business_id", businessId);
-    } else {
-      query = query.eq("client_id", userId);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      console.warn("No se pudieron cargar pedidos para el asistente:", error.message);
-      return [];
-    }
-
-    return (data || []).map((o) => ({
-      id: o.id,
-      codigo: `CC-${o.id.slice(0, 8).toUpperCase()}`,
-      titulo: o.title,
-      estado: o.status,
-      monto: o.final_price || o.price_estimate || 0,
-      anticipo: o.advance_payment || 0,
-      contraparte: o.business?.name || o.client?.full_name || "Vecino",
-      rol: businessId ? "comerciante" : "cliente",
-    }));
-  } catch (err) {
-    console.warn("Excepción al consultar pedidos para IA:", err.message);
     return [];
   }
 }
@@ -256,38 +215,6 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
       mensaje: `Entendido, ${nombreUsuario}. Tu cuenta continúa en rol de Cliente para buscar, consultar y contactar los mejores oficios de la comuna. ¿En qué te colaboro hoy?`,
       tipo: 'conversacion',
       sugerencias: ['Oficios cerca de mí', 'Ver en el mapa', '¿Cómo funciona el Trato Seguro?'],
-    };
-  }
-
-  // 0b. Detección directa de código oficial de Trato Seguro (ej: CC-93E416, CC-ORD-1)
-  const matchCodigo = texto.match(/\b(CC-[A-Z0-9]{4,10})\b/i);
-  if (matchCodigo) {
-    const cod = matchCodigo[1].toUpperCase();
-    const pedidoRelacionado = (contexto?.pedidosActivos || []).find(
-      (p) => p.codigo.toUpperCase() === cod || (p.id && p.id.toUpperCase().startsWith(cod.replace('CC-', '')))
-    );
-
-    let detalle = `¡He ubicado el acuerdo ${cod} en el registro comunal!`;
-    if (pedidoRelacionado) {
-      const est =
-        pedidoRelacionado.estado === 'pending'
-          ? 'Pendiente de inicio'
-          : pedidoRelacionado.estado === 'accepted'
-          ? 'Pacto aceptado por el taller'
-          : pedidoRelacionado.estado === 'in_progress'
-          ? 'Trabajo en ejecución'
-          : pedidoRelacionado.estado === 'completed'
-          ? 'Finalizado y entregado'
-          : pedidoRelacionado.estado;
-      const contra = pedidoRelacionado.rol === 'comerciante' ? `Cliente: ${pedidoRelacionado.contraparte}` : `Taller: ${pedidoRelacionado.contraparte}`;
-      detalle += `\n• Trabajo: ${pedidoRelacionado.titulo}\n• ${contra}\n• Estado: ${est}\n• Valor: $ ${Number(pedidoRelacionado.monto).toLocaleString('es-CO')} COP`;
-    }
-
-    return {
-      mensaje: `${detalle}\n\nToca el botón para consultar el comprobante oficial con código QR y verificación en tiempo real:`,
-      tipo: 'navegacion',
-      rutaNavegacion: `/trato-seguro/verificar/${cod}`,
-      sugerencias: ['¿Cómo funciona el Trato Seguro?', 'Ver mis pedidos activos', 'Ver oficios cercanos'],
     };
   }
 
@@ -602,29 +529,19 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
   ) {
     if (texto.includes("verificar") || texto.includes("código") || texto.includes("codigo")) {
       return {
-        mensaje: `Puedes verificar la autenticidad de cualquier acuerdo vecinal escaneando su código QR o buscando su código oficial (por ejemplo CC-ORD-1). Aquí puedes consultar el comprobante en tiempo real:`,
+        mensaje: `Cada acuerdo registrado tiene un código y un QR. Escanéalo o escríbelo en el verificador y te muestra el negocio, el estado del trabajo y cuánto quedó de anticipo:`,
         tipo: "navegacion",
         rutaNavegacion: "/trato-seguro/verificar",
-        sugerencias: ["Verificar CC-ORD-1", "¿Cómo funciona el Trato Seguro?", "Ver oficios cercanos"],
+        sugerencias: ["Ver un comprobante", "¿Cómo funciona el Trato Seguro?", "Ver oficios cercanos"],
       };
     }
 
     if (texto.includes("pactar") || texto.includes("hacer acuerdo") || texto.includes("crear acuerdo")) {
-      const precioBase = 45000;
-      const anticipoMax = 22500;
       return {
-        mensaje: `¡Excelente iniciativa, ${nombreUsuario}! He estructurado la ficha de Pacto de Trato Seguro. Cumple con la regla comunal: máximo 50% de anticipo para materiales y saldo contra entrega a entera satisfacción:`,
-        tipo: "acuerdo_trato_seguro",
-        acuerdo: {
-          codigo: "CC-ORD-1",
-          servicio: "Servicio de oficio comunal acordado",
-          negocioNombre: "Taller Comunitario",
-          precioEstimado: precioBase,
-          anticipoMaximo: anticipoMax,
-          saldoContraEntrega: precioBase - anticipoMax,
-          modalidad: "workshop",
-        },
-        sugerencias: ["Verificar comprobante oficial", "¿Qué pasa si hay un desacuerdo?", "Ver en el mapa"],
+        mensaje: `El pacto se arma desde la ficha del negocio: eliges el oficio, acuerdan el precio y el anticipo no puede pasar del 50%. Cuando el negocio acepta, el pedido queda con su código y su QR.`,
+        tipo: "navegacion",
+        rutaNavegacion: "/trato-seguro",
+        sugerencias: ["¿Cómo funciona el Trato Seguro?", "Ver oficios cercanos", "¿Qué pasa si hay un desacuerdo?"],
       };
     }
 
@@ -639,18 +556,10 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
     }
 
     return {
-      mensaje: `¡Hola vecino! El Trato Seguro Comunal es el pacto de confianza de nuestro barrio:\n1. 🛡️ Ningún anticipo para compra de materiales puede superar el 50% del total acordado.\n2. 🧾 Todo queda registrado por escrito con código de verificación oficial y código QR escaneable.\n3. 🤝 Si surge algún desacuerdo, cuentas con el respaldo de mediación comunitaria de la Junta de Acción Comunal (JAC) antes de cualquier conflicto.`,
-      tipo: "acuerdo_trato_seguro",
-      acuerdo: {
-        codigo: "CC-ORD-1",
-        servicio: "Servicio de mantenimiento y arreglo",
-        negocioNombre: "Taller Comunal",
-        precioEstimado: 45000,
-        anticipoMaximo: 22500,
-        saldoContraEntrega: 22500,
-        modalidad: "workshop",
-      },
-      sugerencias: ["Verificar comprobante oficial", "¿Qué pasa si hay un desacuerdo?", "Ver en el mapa"],
+      mensaje: `El Trato Seguro Comunal es el pacto de confianza del barrio:\n1. Ningún anticipo para materiales pasa del 50% del total acordado.\n2. Todo queda por escrito, con código de verificación y QR.\n3. Si algo sale mal, reportas el caso desde la ficha del negocio y el equipo de Conecta Comuna lo revisa con las dos partes.\n\nEl pacto se crea desde la ficha del negocio, no desde este chat.`,
+      tipo: "navegacion",
+      rutaNavegacion: "/trato-seguro",
+      sugerencias: ["Ver oficios cercanos", "¿Qué pasa si hay un desacuerdo?", "Ver en el mapa"],
     };
   }
 
@@ -662,7 +571,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
     texto.includes("mediacion")
   ) {
     return {
-      mensaje: `Si surge algún inconveniente o retraso con un trabajo, ConectaComuna promueve la mediación comunitaria a través de los líderes de la Junta de Acción Comunal (JAC) y los facilitadores del barrio, buscando siempre un acuerdo amistoso y justo.`,
+      mensaje: `Si surge algún inconveniente o retraso con un trabajo, repórtalo desde la ficha del negocio. El equipo de Conecta Comuna revisa el caso con las dos partes y, si hace falta, pide a un facilitador del barrio que acompañe la conversación.`,
       tipo: "conversacion",
       sugerencias: ["¿Cómo funciona el Trato Seguro?", "¿Qué es el facilitador?", "Ver oficios cercanos"],
     };
@@ -677,7 +586,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
     texto.includes("adulto mayor")
   ) {
     return {
-      mensaje: `El Facilitador Comunitario es un familiar o vecino joven de confianza que apoya a los adultos mayores o artesanos a gestionar su catálogo y fotos. En el panel de negocio encuentras un código de 6 letras para vincularlo de inmediato.`,
+      mensaje: `El Facilitador Comunitario es un familiar o vecino de confianza que apoya a los adultos mayores o artesanos a gestionar su catálogo y fotos. En el panel de negocio encuentras un código de 8 caracteres para vincularlo.`,
       tipo: "conversacion",
       sugerencias: ["Crear negocio para publicar", "¿Cómo funciona el Trato Seguro?", "Ver oficios cercanos"],
     };
@@ -1050,9 +959,9 @@ REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
 2. VISITANTE ANÓNIMO:
    - Solo a quien no ha iniciado sesión se le sugiere ir a /registro?tipo=business o /entrar.
 3. TRATO SEGURO Y PACTOS VECINALES:
-   - El anticipo máximo legal es del 50%. Si alguien solicita más, corrígelo con amabilidad.
+   - El anticipo máximo que permite el Trato Seguro es del 50%. Si alguien solicita más, corrígelo con amabilidad.
    - Si el usuario pregunta por sus pedidos, acuerdos o cómo va su trabajo, respóndele con los datos REALES de la lista de pedidos de arriba con su código (#CC-...) y estado actual.
-   - Si el usuario menciona un código de verificación (como CC-93E416) o pide verificar un pacto, bríndale la información y asigna siempre "tipo": "navegacion" y "rutaNavegacion": "/trato-seguro/verificar/" + codigo.
+   - Si el usuario menciona un código de verificación, NO inventes su contenido: no tienes acceso a la tabla de pedidos. Dile que lo consulte en el verificador y ofrece el enlace con tipo "navegacion" y rutaNavegacion: "/trato-seguro/verificar/" + codigo, sin afirmar si el pacto existe.
 4. REGLA ESTRICTA DE FORMATO:
    - Redacta siempre en texto limpio, cercano y natural. NO uses asteriscos (** ni *) para resaltar palabras; usa mayúsculas iniciales, comillas o viñetas limpias (•).
 
@@ -1070,7 +979,7 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
    - Si el usuario dice "Cambiar el precio", NO recomiendes negocios. Pregúntale a qué nuevo valor desea ajustarlo.
    - Si el usuario responde con un número o precio, actualiza el servicio con el nuevo precio y devuelve tipo: "servicio_catalogo".
 4. TRATO SEGURO COMUNAL:
-   - Los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total acordado. Todo queda registrado con código de comprobante oficial y mediación comunitaria.
+   - Los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total acordado. Todo queda registrado con un código de comprobante que cualquiera puede verificar. Si algo sale mal, el equipo de Conecta Comuna revisa el caso.
 5. BÚSQUEDA DE OFICIOS:
    - Recomienda negocios existentes de la lista priorizando cercanía solo cuando el usuario busque un oficio o pregunte qué hay cerca.
 6. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
@@ -1108,7 +1017,7 @@ Debes responder SIEMPRE un único objeto JSON válido con la siguiente estructur
  * Extrae y parsea un objeto JSON válido desde el texto generado por Gemini,
  * limpiando bloques markdown (```json ... ```) si es necesario.
  */
-function extraerJsonValido(texto) {
+export function extraerJsonValido(texto) {
   if (!texto || typeof texto !== "string") return null;
   const textoLimpio = texto.trim();
 
@@ -1147,7 +1056,7 @@ function extraerJsonValido(texto) {
  * POST /api/ai/chat
  * Endpoint principal de conversación con el Asistente Comunal
  */
-ruta.post("/chat", async (req, res) => {
+ruta.post("/chat", envolver(async (req, res) => {
   const ip = req.ip || req.socket.remoteAddress || "desconocido";
   if (!quedaDentroDelLimite(ip)) {
     return res.status(429).json({
@@ -1185,16 +1094,9 @@ ruta.post("/chat", async (req, res) => {
   // Consultar negocios reales
   const negocios = await obtenerNegociosComuna();
 
-  // Si no se proporcionaron pedidos activos y el usuario está autenticado, cargarlos de Supabase
-  if (contexto && (contexto.userId || contexto?.negocioPropio?.id) && (!contexto.pedidosActivos || contexto.pedidosActivos.length === 0)) {
-    const pedidosCargados = await obtenerPedidosUsuario(contexto.userId, contexto?.negocioPropio?.id);
-    contexto.pedidosActivos = pedidosCargados;
-  }
-
   const apiKey = process.env.GEMINI_API_KEY;
   const textoLimpio = mensaje.toLowerCase().trim();
 
-  const matchCodigoDirecto = /\b(CC-[A-Z0-9]{4,10})\b/i.test(textoLimpio);
   const esConsultaPedidosDirecta =
     textoLimpio.includes("mis pedidos") ||
     textoLimpio.includes("mi pedido") ||
@@ -1229,7 +1131,6 @@ ruta.post("/chat", async (req, res) => {
 
   const esIntencionDirecta =
     esSaludoSuelto ||
-    matchCodigoDirecto ||
     esConsultaPedidosDirecta ||
     (esPreguntaCercaniaDirecta && !tieneUbicacionExplicita) ||
     textoLimpio === "ver en el mapa" ||
@@ -1372,6 +1273,6 @@ ruta.post("/chat", async (req, res) => {
     );
     return res.json(fallback);
   }
-});
+}));
 
 export default ruta;
