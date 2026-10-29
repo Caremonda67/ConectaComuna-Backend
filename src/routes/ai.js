@@ -3,6 +3,39 @@ import claveSupabase from "../config/supabase.js";
 
 const ruta = Router();
 
+// Límite por IP para el asistente. Cada mensaje abierto se traduce en una
+// llamada a Gemini, así que sin tope una pestaña olvidada quema la cuota del mes.
+const mensajesPorIp = new Map();
+const VENTANA_CHAT_MS = 10 * 60 * 1000;
+const MAX_MENSAJES_VENTANA = 30;
+const MAX_TEXTO_MENSAJE = 800;
+
+// Cuando un modelo contesta 429 se queda fuera un rato. Sin esto, cada mensaje
+// gasta dos llamadas fallidas antes de llegar al modelo que sí tiene cupo.
+const modelosEnEspera = new Map();
+const ESPERA_TRAS_429_MS = 10 * 60 * 1000;
+
+function quedaDentroDelLimite(ip) {
+  const ahora = Date.now();
+  const recientes = (mensajesPorIp.get(ip) || []).filter((t) => ahora - t < VENTANA_CHAT_MS);
+
+  if (recientes.length >= MAX_MENSAJES_VENTANA) {
+    mensajesPorIp.set(ip, recientes);
+    return false;
+  }
+
+  recientes.push(ahora);
+  mensajesPorIp.set(ip, recientes);
+
+  if (mensajesPorIp.size > 2000) {
+    for (const [clave, marcas] of mensajesPorIp) {
+      if (!marcas.some((t) => ahora - t < VENTANA_CHAT_MS)) mensajesPorIp.delete(clave);
+    }
+  }
+
+  return true;
+}
+
 // La ubicación llega resuelta desde el cliente, que la obtiene del GPS o del
 // geocodificador. Aquí no se adivina: el diccionario de barrios que había antes
 // solo conocía ocho barrios de Cali y pisaba la ubicación real de quien
@@ -172,7 +205,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
 
   if (esPreguntaCercania && !tieneUbicacionExplicita) {
     return {
-      mensaje: `Vecino, aún no conozco tu barrio o ubicación exacta en la comuna para calcularte distancias precisas. Puedes activar tu ubicación con el botón de GPS o indicarme en qué barrio te encuentras (por ejemplo: Antonio Nariño, El Rodeo, Nueva Floresta, Vallado).\n\nMientras tanto, aquí tienes algunos de los oficios y talleres más recomendados de la comuna:`,
+      mensaje: `Vecino, todavía no sé dónde estás para calcularte distancias precisas. Puedes tocar el botón de ubicación o escribirme tu barrio con la ciudad, como "Estoy en El Rodeo, Cali" o "Estoy en Chapinero, Bogotá".\n\nMientras tanto, aquí tienes algunos de los oficios y talleres más recomendados de la comuna:`,
       tipo: "negocios",
       negociosSugeridos: negocios.slice(0, 3).map((n) => ({
         id: n.id,
@@ -185,9 +218,8 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
       })),
       sugerencias: [
         "📍 Usar mi ubicación actual",
-        "Estoy en El Rodeo",
-        "Estoy en Antonio Nariño",
-        "Estoy en Nueva Floresta",
+        "Estoy en El Rodeo, Cali",
+        "Estoy en Chapinero, Bogotá",
       ],
     };
   }
@@ -981,7 +1013,8 @@ function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}
     .join("\n");
 
   return `Eres el "Asistente Comunal de ConectaComuna", un copiloto barrial para los habitantes y micro-emprendedores de la Comuna en Cali, Colombia.
-Tu tono es humano, cálido, respetuoso, solidario y sin tecnicismos ("vecino", "vecina", trato amable colombiano/caleño).
+Tu tono es humano, cálido, respetuoso, solidario y sin tecnicismos (trato amable colombiano/caleño).
+No conoces el género de quien escribe, así que nunca lo supongas: di "vecino" como trato neutro, o mejor el nombre de la persona si lo tienes en el contexto. Nada de "vecina", "bienvenido", "estás listo" ni adjetivos en femenino o masculino referidos a quien escribe.
 
 INFORMACIÓN DE UBICACIÓN DEL USUARIO:
 ${tieneUbicacionExplicita
@@ -991,14 +1024,14 @@ ${tieneUbicacionExplicita
 - REGLA ESTRICTA DE UBICACIÓN NO DEFINIDA:
   1. JAMÁS asumas por defecto que el usuario está en Antonio Nariño ni en ningún barrio específico.
   2. Si el usuario pregunta "cuál es el comercio más cercano", "qué negocio me queda más cerca", "oficios cerca" o pregunta distancias:
-     • Respóndele amablemente que aún no conoces en qué barrio de la comuna se encuentra para calcularle distancias precisas.
-     • Invítalo a compartir su GPS o indicarte su barrio (por ejemplo: Antonio Nariño, El Rodeo, Nueva Floresta, Vallado).
+     • Respóndele amablemente que aún no sabes dónde está para calcularle distancias precisas.
+     • Invítalo a compartir su GPS o a escribirle su barrio con la ciudad, porque la aplicación atiende cualquier lugar de Colombia. Da ejemplos de ciudades distintas (por ejemplo "Estoy en Chapinero, Bogotá" o "Estoy en El Rodeo, Cali"), nunca una lista de barrios de una sola ciudad.
      • Ofrécele los oficios recomendados de la comuna sin inventar distancias en metros.
-     • En "sugerencias" pon siempre: ["📍 Usar mi ubicación actual", "Estoy en El Rodeo", "Estoy en Antonio Nariño", "Estoy en Nueva Floresta"].
-  3. Si el usuario indica su barrio (ej: "Estoy en El Rodeo", "vivo en San Judas", "mi barrio es Nueva Floresta"):
-     • Confírmale que has ubicado su zona en ese barrio.
-     • Incluye en el JSON: "ubicacionDetectada": { "barrio": "NombreDelBarrio", "lat": 3.4..., "lng": -76.5... }.
-     • Prioriza los negocios recomendados según cercanía a ese barrio.`}
+     • En "sugerencias" pon: ["📍 Usar mi ubicación actual", "Escribir mi barrio y ciudad"].
+  3. Si el usuario indica dónde está (ej: "Estoy en El Rodeo", "vivo en Chapinero, Bogotá", "mi barrio es Laureles"):
+     • Confírmale que has ubicado su zona, repitiendo el lugar tal como él lo escribió.
+     • JAMÁS inventes coordenadas ni devuelvas "ubicacionDetectada": la aplicación resuelve el lugar contra el mapa antes de llegar aquí. Inventar lat/lng movía a la persona de ciudad sin que lo pidiera.
+     • Prioriza los negocios recomendados según cercanía a ese lugar.`}
 - Estado de autenticación: ${esAutenticado ? "Usuario con sesión iniciada" : "Visitante anónimo (sin sesión)"}.
 - Nombre del usuario: ${nombreUsuario}.
 - Tipo de cuenta / Rol: ${tipoCuenta}.
@@ -1031,6 +1064,8 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
 2. DICTADO DE SERVICIOS:
    - Si el usuario dice "dictar mi servicio" o pregunta cómo dictar, NO crees una tarjeta de servicio falsa. Explícale con entusiasmo que toque el botón del micrófono o escriba qué hace y cuánto cobra, y dale 2 ejemplos claros.
    - Solo genera tipo: "servicio_catalogo" cuando el usuario REALMENTE describa su oficio o producto con detalles y precio.
+   - NUNCA digas que ya guardaste, registraste o publicaste el servicio, ni que los vecinos ya pueden encontrarlo. La tarjeta es un borrador y solo queda publicado cuando la persona toca el botón. Di que así entendiste el oficio y el precio, y pídele que confirme.
+   - Revisa "Negocio propio" en el contexto: si no tiene negocio creado, explícale en una frase sencilla que para publicarlo primero hay que crear su negocio, y que el botón de abajo lo lleva. Si ya tiene negocio, dile que confirme para agregarlo a su catálogo.
 3. CAMBIO DE PRECIO:
    - Si el usuario dice "Cambiar el precio", NO recomiendes negocios. Pregúntale a qué nuevo valor desea ajustarlo.
    - Si el usuario responde con un número o precio, actualiza el servicio con el nuevo precio y devuelve tipo: "servicio_catalogo".
@@ -1113,10 +1148,30 @@ function extraerJsonValido(texto) {
  * Endpoint principal de conversación con el Asistente Comunal
  */
 ruta.post("/chat", async (req, res) => {
-  const { mensaje, historial = [], ubicacion, contexto } = req.body;
+  const ip = req.ip || req.socket.remoteAddress || "desconocido";
+  if (!quedaDentroDelLimite(ip)) {
+    return res.status(429).json({
+      error: "Vas muy rápido. Descansa un momento y seguimos conversando.",
+    });
+  }
+
+  const { mensaje, ubicacion, contexto } = req.body || {};
+  const historial = (Array.isArray(req.body?.historial) ? req.body.historial : [])
+    .slice(-10)
+    .map((h) => ({
+      rol: h?.rol === "user" ? "user" : "model",
+      texto: typeof h?.texto === "string" ? h.texto.slice(0, 600) : "",
+    }))
+    .filter((h) => h.texto);
 
   if (!mensaje || typeof mensaje !== "string" || !mensaje.trim()) {
     return res.status(400).json({ error: "El mensaje es obligatorio." });
+  }
+
+  if (mensaje.length > MAX_TEXTO_MENSAJE) {
+    return res.status(400).json({
+      error: `El mensaje es muy largo. Cuéntame en menos de ${MAX_TEXTO_MENSAJE} caracteres.`,
+    });
   }
 
   const tieneUbicacionExplicita = !!(
@@ -1165,7 +1220,15 @@ ruta.post("/chat", async (req, res) => {
     textoLimpio.includes("comercio más cercano") ||
     textoLimpio.includes("comercio mas cercano");
 
+  // Un saludo solo, sin pedido detrás, no merece gastar una llamada a Gemini.
+  // "hola, busco un cerrajero" no entra aquí: ahí sí hay algo que entender.
+  const esSaludoSuelto =
+    /^(hola|holi|buen[ao]s|buenos d[ií]as|buenas tardes|buenas noches|qu[eé] tal|saludos|hey)[\s!.¡?¿]*$/i.test(
+      textoLimpio
+    );
+
   const esIntencionDirecta =
+    esSaludoSuelto ||
     matchCodigoDirecto ||
     esConsultaPedidosDirecta ||
     (esPreguntaCercaniaDirecta && !tieneUbicacionExplicita) ||
@@ -1227,6 +1290,8 @@ ruta.post("/chat", async (req, res) => {
     let parsedResultado = null;
 
     for (const modelo of modelosCandidatos) {
+      if ((modelosEnEspera.get(modelo) || 0) > Date.now()) continue;
+
       try {
         const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
         const respuestaHttp = await fetch(urlGemini, {
@@ -1246,9 +1311,14 @@ ruta.post("/chat", async (req, res) => {
         });
 
         if (!respuestaHttp.ok) {
+          if (respuestaHttp.status === 429) {
+            modelosEnEspera.set(modelo, Date.now() + ESPERA_TRAS_429_MS);
+          }
           console.warn(`Gemini modelo ${modelo} respondió status: ${respuestaHttp.status}. Intentando siguiente...`);
           continue;
         }
+
+        modelosEnEspera.delete(modelo);
 
         const jsonGemini = await respuestaHttp.json();
         const partConTexto = jsonGemini?.candidates?.[0]?.content?.parts?.find(
