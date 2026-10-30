@@ -35,12 +35,3 @@ export const limiteAsistente = rateLimit({
     "El Asistente Comunal recibió muchos mensajes seguidos desde tu conexión. Espera unos minutos."
   ),
 });
-
-/** Crear cuentas y publicar negocios o reseñas no debería ir en ráfaga. */
-export const limiteEscritura = rateLimit({
-  windowMs: 10 * 60 * 1000,
-  limit: 40,
-  standardHeaders: "draft-7",
-  legacyHeaders: false,
-  handler: respuesta("Demasiados envíos seguidos. Espera unos minutos antes de volver a intentar."),
-});

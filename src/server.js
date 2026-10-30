@@ -3,13 +3,9 @@ import express from "express";
 import cors from "cors";
 
 import rutasSalud from "./routes/salud.js";
-import rutasAuth from "./routes/auth.js";
-import rutasBusinesses from "./routes/businesses.js";
 import rutasOrders from "./routes/orders.js";
-import rutasReviews from "./routes/reviews.js";
-import rutasReports from "./routes/reports.js";
 import rutasAi from "./routes/ai.js";
-import { limiteAsistente, limiteEscritura, limiteGeneral } from "./config/limites.js";
+import { limiteAsistente, limiteGeneral } from "./config/limites.js";
 import { manejadorDeErrores } from "./middleware/errores.js";
 
 const origenesConfigurados = (process.env.FRONTEND_URL || "")
@@ -59,12 +55,11 @@ app.use(express.json({ limit: "128kb" }));
 // ping que mantiene el servicio despierto.
 app.use("/api", rutasSalud);
 
+// Tres rutas, cada una con su motivo: decir que el servicio está vivo, resolver
+// el QR del pacto sin abrir la tabla de pedidos, y hablar con Gemini sin
+// exponer la llave en el navegador. El resto del CRUD va por PostgREST con RLS.
 app.use("/api", limiteGeneral);
-app.use("/api/auth", limiteEscritura, rutasAuth);
-app.use("/api/businesses", rutasBusinesses);
 app.use("/api/orders", rutasOrders);
-app.use("/api/reviews", limiteEscritura, rutasReviews);
-app.use("/api/reports", limiteEscritura, rutasReports);
 app.use("/api/ai", limiteAsistente, rutasAi);
 
 // Lo que no exista responde JSON. El 404 en HTML de Express confunde a quien
