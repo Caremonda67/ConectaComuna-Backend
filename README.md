@@ -22,8 +22,10 @@ copy .env.example .env
 
 Las variables estan descritas dentro del propio archivo `.env.example`.
 
-El esquema de la base de datos esta en `schema.sql` y se aplica desde la
-consola SQL de Supabase.
+El esquema de la base de datos vive en el repositorio del frontend, en
+`supabase/schema.sql`. Se aplica pegandolo en la consola SQL de Supabase y se
+puede volver a correr: las tablas, las politicas y los permisos de columna ya
+nacen cerrados.
 
 ## Ejecutar
 
