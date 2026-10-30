@@ -698,6 +698,8 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
     texto.includes("comercios del piloto") ||
     texto.includes("oficios del piloto") ||
     texto.includes("negocios del piloto") ||
+    texto.includes("talleres del piloto") ||
+    texto.includes("talleres piloto") ||
     texto.includes("piloto en cali") ||
     texto.includes("piloto de cali");
 
@@ -1198,7 +1200,9 @@ ruta.post("/chat", envolver(async (req, res) => {
         const respuestaHttp = await fetch(urlGemini, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(8000),
+          // Tres modelos a 6 s caben en los 20 s que aguanta el navegador.
+          // Antes eran 8 s y el cliente se rendía mientras el servidor seguía.
+          signal: AbortSignal.timeout(6000),
           body: JSON.stringify({
             systemInstruction: {
               parts: [{ text: promptSistema }],
