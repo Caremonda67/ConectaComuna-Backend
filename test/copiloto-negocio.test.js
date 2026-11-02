@@ -220,3 +220,56 @@ test("sin catalogo el prompt lo dice en vez de dejar el bloque vacio", () => {
   );
   assert.match(prompt, /Todavía no tiene servicios en el catálogo/);
 });
+
+/**
+ * Con varios pedidos activos el copiloto no puede elegir por su cuenta: si
+ * acepta el equivocado, fija un precio real en el pedido de otra persona.
+ * Y la lista que recibe viene recortada, asi que tampoco puede presentarla
+ * como si fuera todo lo que hay.
+ */
+
+function pedido(id, titulo, contraparte, monto) {
+  return {
+    id,
+    codigo: `CC-${id.toUpperCase()}`,
+    titulo,
+    estado: "pending",
+    monto,
+    anticipo: 0,
+    contraparte,
+    rol: "comerciante",
+  };
+}
+
+test("el prompt obliga a listar y preguntar cuando hay varios pedidos", () => {
+  const contexto = contextoNegocio();
+  contexto.pedidosActivos = [
+    pedido("ord-1", "Trenzas para quinceañera", "Carmen", 60000),
+    pedido("ord-2", "Trenzas africanas", "Luz Mery", 45000),
+  ];
+  contexto.totalPedidosActivos = 2;
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contexto, true);
+
+  assert.match(prompt, /id: ord-1/);
+  assert.match(prompt, /id: ord-2/);
+  assert.match(prompt, /Si hay VARIOS, NO elijas tú/);
+  // Una opcion por pedido para poder tocar en vez de teclear.
+  assert.match(prompt, /UNA opción por pedido/);
+  // Sin recorte no debe aparecer la advertencia.
+  assert.doesNotMatch(prompt, /ATENCION: el usuario tiene/);
+});
+
+test("avisa cuando la lista de pedidos viene recortada", () => {
+  const contexto = contextoNegocio();
+  contexto.pedidosActivos = [pedido("ord-1", "Trenzas", "Carmen", 60000)];
+  contexto.totalPedidosActivos = 7;
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contexto, true);
+
+  assert.match(prompt, /tiene 7 pedidos activos en total/);
+  assert.match(prompt, /NUNCA digas que esos son todos/);
+});
+
+test("prohibe elegir el pedido por su posicion en la lista", () => {
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
+  assert.match(prompt, /Nunca uses "el último", "el primero"/);
+});

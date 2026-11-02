@@ -1019,6 +1019,17 @@ export function construirPromptSistema(negocios, barrioUsuario, lat, lng, contex
           .join('\n')
       : "No tiene pedidos ni pactos activos en este momento.";
 
+  // Cuantos hay de verdad. La lista de arriba viene recortada para no inflar
+  // el prompt, y sin este dato el modelo la presentaba como completa:
+  // afirmaba "tienes 5 pedidos" cuando habia mas, y los que faltaban eran los
+  // mas antiguos.
+  const totalActivos = contexto?.totalPedidosActivos ?? pedidosActivos.length;
+  const avisoRecorte =
+    totalActivos > pedidosActivos.length
+      ? `
+- ATENCION: el usuario tiene ${totalActivos} pedidos activos en total, pero arriba solo aparecen ${pedidosActivos.length}. NUNCA digas que esos son todos; si pregunta por el total, di ${totalActivos} y sugiere abrir el panel para verlos completos.`
+      : "";
+
   // Historial del negocio. Sin esto el modelo solo veía los pedidos ACTIVOS y
   // ante "¿cuántos he finalizado?" respondía que ninguno, aunque el panel del
   // emprendedor mostrara dos. Un trabajo cerrado desaparecía de la vista del
@@ -1079,7 +1090,7 @@ ${tieneUbicacionExplicita
 - Pantalla actual: ${rutaActual}.
 
 PEDIDOS Y PACTOS ACTIVOS DEL USUARIO EN LA COMUNA:
-${listaPedidos}
+${listaPedidos}${avisoRecorte}
 
 HISTORIAL DEL NEGOCIO DEL USUARIO (trabajos ya cerrados):
 ${resumenNegocio}
@@ -1137,6 +1148,12 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
    b) ACEPTAR UN PEDIDO Y FIJAR EL PRECIO → accionPendiente.tipo: "aceptar_pedido"
       payload: { "pedidoId": "<id del pedido>", "precioFinal": 60000, "anticipo": 20000 }
       Solo para pedidos en estado "pending". El anticipo NUNCA puede pasar del 50% del precio final: si te piden más, dilo y ofrece el 50%. Aunque te equivoques, la base lo rechaza.
+
+   CÓMO ELEGIR EL PEDIDO CUANDO HAY VARIOS (vale para b y c):
+      - Si hay UN SOLO pedido que encaje, nómbralo igual ("el de Carmen, las trenzas, $60.000") y pide confirmación. Nombrarlo es lo que permite a la persona cazar tu error antes de aceptar.
+      - Si hay VARIOS, NO elijas tú. Lista los que encajen —cliente, trabajo y monto— y pregunta cuál. En "sugerencias" pon UNA opción por pedido, escrita como la tocaría la persona: "El de Carmen · Trenzas · $60.000". Muchos de nuestros usuarios escriben con dificultad: poder tocar en vez de teclear no es comodidad, es que puedan usarlo.
+      - Nunca uses "el último", "el primero" ni el orden de la lista para decidir: la persona no ve tu lista en el mismo orden.
+      - Si la persona responde algo ambiguo ("el de las trenzas" y hay dos), vuelve a preguntar. Más vale una pregunta de más que aceptar el pedido equivocado a un precio equivocado.
 
    c) DEJAR NOTA DE AVANCE AL CLIENTE → accionPendiente.tipo: "nota_avance_pedido"
       payload: { "pedidoId": "<id del pedido>", "nota": "Ya compré los materiales, entrego mañana" }
