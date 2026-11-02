@@ -1,0 +1,34 @@
+name: Verificar
+
+# Mismo criterio que en el frontend: nada entra a `main` sin pasar por aquí.
+# Las 21 pruebas del backend existían desde hace tiempo, pero solo corrían si
+# alguien escribía `npm test` a mano, que es como no tenerlas.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sintaxis
+        run: node --check src/server.js
+
+      - name: Pruebas
+        # Las pruebas son de funciones puras y no tocan la base, pero el
+        # módulo arma el cliente de Supabase al importarse y necesita las
+        # variables puestas. Son valores de relleno: no apuntan a nada real.
+        env:
+          SUPABASE_URL: https://ejemplo.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: clave-de-prueba
+        run: npm test
