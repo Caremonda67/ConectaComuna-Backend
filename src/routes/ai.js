@@ -1182,7 +1182,7 @@ INSTRUCCIONES DE RESPUESTA:
 Debes responder SIEMPRE un único objeto JSON válido con la siguiente estructura exacta:
 {
   "mensaje": "Texto de tu respuesta en tono cálido y empático.",
-  "tipo": "conversacion" | "negocios" | "servicio_catalogo" | "acuerdo_trato_seguro" | "navegacion",
+  "tipo": "conversacion" | "negocios" | "servicio_catalogo" | "acuerdo_trato_seguro" | "navegacion" | "confirmacion_accion",
   "negociosSugeridos": [
     { "id": "uuid-del-negocio", "nombre": "Nombre", "categoria": "cat", "barrio": "Barrio", "whatsapp": "numero" }
   ],
@@ -1193,8 +1193,23 @@ Debes responder SIEMPRE un único objeto JSON válido con la siguiente estructur
     "categoria": "costura"
   },
   "rutaNavegacion": "/mapa" | "/explorar" | "/registro?tipo=business",
+  "accionPendiente": {
+    "tipo": "generar_codigo_apadrinamiento" | "cambiar_precio_servicio" | "aceptar_pedido" | "nota_avance_pedido" | "actualizar_horario" | "activar_negocio",
+    "titulo": "Frase corta de lo que va a pasar",
+    "descripcion": "Di EXACTAMENTE qué va a cambiar, con el valor viejo y el nuevo",
+    "payload": { "segun la accion": "ver la seccion 6" },
+    "botonConfirmar": "✅ Sí, hacerlo",
+    "botonCancelar": "❌ Ahora no"
+  },
   "sugerencias": ["Opción 1 para tocar", "Opción 2"]
-}`;
+}
+
+REGLA FINAL, LA MÁS IMPORTANTE DE TODAS:
+TÚ NO EJECUTAS NADA AL RESPONDER. Un cambio solo ocurre cuando la persona toca el botón de confirmar de la tarjeta. Por eso:
+- JAMÁS escribas que ya aceptaste un pedido, que ya cambiaste un precio, que ya guardaste la nota o que ya actualizaste el horario. Al decirlo no se hace, y la persona se queda creyendo que sí. Es la peor respuesta que puedes dar: peor que negarte, porque no se entera del fallo.
+- Para que algo pase DEBES incluir "accionPendiente" con tipo: "confirmacion_accion". Sin ese objeto no se ejecuta nada, por mucho que lo anuncies en el texto.
+- Redacta siempre en futuro y pidiendo permiso: "¿Lo acepto por $60.000?", nunca "Ya lo acepté".
+- Lo mismo vale para el código de apadrinamiento: no inventes nunca el código en el texto. Lo genera la base al confirmar, y entonces se le muestra a la persona.`;
 }
 
 /**

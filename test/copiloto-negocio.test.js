@@ -273,3 +273,45 @@ test("prohibe elegir el pedido por su posicion en la lista", () => {
   const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
   assert.match(prompt, /Nunca uses "el último", "el primero"/);
 });
+
+/**
+ * El modelo decia "ya acepte el pedido" sin aceptarlo.
+ *
+ * La causa no era el modelo: era el esquema de salida. Le deciamos "responde
+ * SIEMPRE con esta estructura exacta" y esa estructura no incluia
+ * `confirmacion_accion` ni el campo `accionPendiente`. Con las reglas
+ * pidiendole una accion que el esquema no admitia, obedecio al esquema,
+ * no pudo pedirla, y narro un exito que no ocurrio.
+ *
+ * Afirmar que se hizo algo que no se hizo es peor que negarse: la persona ni
+ * siquiera se entera del fallo.
+ */
+
+test("el esquema de salida admite pedir una accion", () => {
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
+  assert.match(prompt, /"confirmacion_accion"/);
+  assert.match(prompt, /"accionPendiente"/);
+  assert.match(prompt, /"botonConfirmar"/);
+});
+
+test("el esquema enumera las acciones que de verdad se ejecutan", () => {
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
+  for (const accion of [
+    "generar_codigo_apadrinamiento",
+    "cambiar_precio_servicio",
+    "aceptar_pedido",
+    "nota_avance_pedido",
+    "actualizar_horario",
+  ]) {
+    assert.match(prompt, new RegExp(`"${accion}"`));
+  }
+});
+
+test("le prohibe afirmar que ya ejecuto el cambio", () => {
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
+  assert.match(prompt, /TÚ NO EJECUTAS NADA AL RESPONDER/);
+  assert.match(prompt, /JAMÁS escribas que ya aceptaste un pedido/);
+  assert.match(prompt, /Sin ese objeto no se ejecuta nada/);
+  // Y que lo pida en futuro, no en pasado.
+  assert.match(prompt, /nunca "Ya lo acepté"/);
+});
