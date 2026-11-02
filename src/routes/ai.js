@@ -138,7 +138,7 @@ async function obtenerNegociosComuna() {
  * Motor local inteligente y con memoria de contexto multi-turno.
  * Garantiza respuestas naturales y útiles para todas las sugerencias y flujos del sistema.
  */
-function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
+export function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
   const texto = mensaje.toLowerCase().trim();
   const tieneUbicacionExplicita = !!(
     ubicacionUsuario?.esDefinida && ubicacionUsuario?.barrio && ubicacionUsuario.barrio !== "Comuna"
@@ -215,6 +215,109 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
       mensaje: `Entendido, ${nombreUsuario}. Tu cuenta continúa en rol de Cliente para buscar, consultar y contactar los mejores oficios de la comuna. ¿En qué te colaboro hoy?`,
       tipo: 'conversacion',
       sugerencias: ['Oficios cerca de mí', 'Ver en el mapa', '¿Cómo funciona el Trato Seguro?'],
+    };
+  }
+
+  // 0b-ter. Código de apadrinamiento.
+  //
+  // El asistente respondió que ConectaComuna «no cuenta con una opción para
+  // generar códigos de apadrinamiento», con el botón que lo genera visible en
+  // el panel de la misma persona. Inventó una limitación del producto, que es
+  // la peor clase de error de un copiloto. La palabra no aparecía en ninguno
+  // de los dos motores, así que el modelo improvisaba.
+  if (
+    texto.includes('apadrinamiento') ||
+    texto.includes('apadrinar') ||
+    texto.includes('apadrina') ||
+    ((texto.includes('codigo') || texto.includes('código')) && texto.includes('facilitador'))
+  ) {
+    if (!esAutenticado) {
+      return {
+        mensaje:
+          'El código de apadrinamiento lo genera el dueño del negocio desde su cuenta. Ingresa y te muestro cómo.',
+        tipo: 'navegacion',
+        rutaNavegacion: '/entrar',
+        sugerencias: ['Ingresar a mi cuenta', '¿Qué es un facilitador?'],
+      };
+    }
+
+    if (!tieneNegocio) {
+      return {
+        mensaje:
+          'El código de apadrinamiento sirve para que alguien de confianza te ayude a manejar tu negocio en la plataforma. Para generarlo primero hay que crear tu negocio.',
+        tipo: 'navegacion',
+        rutaNavegacion: '/panel/negocio',
+        sugerencias: ['Crear mi negocio', '¿Qué es un facilitador?'],
+      };
+    }
+
+    return {
+      mensaje: `${nombreUsuario}, sí se puede: el código de apadrinamiento deja que una persona de confianza —un familiar, un vecino o tu facilitador comunitario— edite las fotos, los precios y el catálogo de ${nombreNegocio}.\n\nSon 8 caracteres, sirve una sola vez y vence en 24 horas. Se entrega en mano, nunca por grupos: quien lo tenga puede tomar el control de tu ficha.\n\n¿Te lo genero ahora?`,
+      tipo: 'confirmacion_accion',
+      accionPendiente: {
+        tipo: 'generar_codigo_apadrinamiento',
+        titulo: 'Generar código de apadrinamiento',
+        descripcion:
+          'Crea un código de un solo uso, válido 24 horas, para que alguien de confianza pueda editar tu negocio. El código anterior deja de servir.',
+        botonConfirmar: '✅ Sí, generar el código',
+        botonCancelar: '❌ Ahora no',
+      },
+      sugerencias: ['✅ Sí, generar el código', '¿Qué puede hacer un facilitador?'],
+    };
+  }
+
+  // 0b-bis. Cómo le va al negocio: trabajos finalizados, calificación, reseñas.
+  //
+  // Va ANTES de la consulta de pedidos a propósito. La de abajo solo mira
+  // `pedidosActivos`, que trae pendientes, aceptados y en curso: los
+  // finalizados quedan fuera por definición. Preguntar "¿cuántos pedidos he
+  // finalizado?" caía ahí y respondía que ninguno aunque el panel mostrara
+  // dos. Para un emprendedor esa respuesta no es un detalle: es el asistente
+  // diciéndole que su trabajo no existe.
+  const esConsultaDesempeno =
+    texto.includes('finalizado') ||
+    texto.includes('finalizados') ||
+    texto.includes('terminado') ||
+    texto.includes('terminados') ||
+    texto.includes('completado') ||
+    texto.includes('completados') ||
+    texto.includes('cuántos trabajos') ||
+    texto.includes('cuantos trabajos') ||
+    texto.includes('cuántos pedidos') ||
+    texto.includes('cuantos pedidos') ||
+    texto.includes('cuántos servicios') ||
+    texto.includes('cuantos servicios') ||
+    texto.includes('mi calificación') ||
+    texto.includes('mi calificacion') ||
+    texto.includes('mis reseñas') ||
+    texto.includes('mis resenas') ||
+    texto.includes('cómo va mi negocio') ||
+    texto.includes('como va mi negocio');
+
+  if (esConsultaDesempeno && esEmprendedor && tieneNegocio) {
+    const finalizados = contexto?.negocioPropio?.pedidosFinalizados ?? 0;
+    const resenas = contexto?.negocioPropio?.resenas ?? 0;
+    const calificacion = contexto?.negocioPropio?.calificacion ?? 0;
+    const activos = Array.isArray(contexto?.pedidosActivos) ? contexto.pedidosActivos.length : 0;
+
+    const lineas = [
+      `• Trabajos finalizados: **${finalizados}**`,
+      `• Trabajos en curso ahora: **${activos}**`,
+      resenas > 0
+        ? `• Calificación: **${Number(calificacion).toFixed(1)}** de 5, con ${resenas} ${resenas === 1 ? 'reseña' : 'reseñas'}`
+        : '• Todavía no tienes reseñas. Llegan cuando el cliente califica un trabajo finalizado.',
+    ].join('\n');
+
+    const cierre =
+      finalizados === 0
+        ? '\n\nTodavía no has cerrado ningún trabajo por la plataforma. Un pedido cuenta como finalizado cuando lo marcas así desde tu panel: ahí se suma a tu historial y el cliente puede calificarte.'
+        : '\n\nCada trabajo que marcas como finalizado suma a tu historial y habilita que el cliente te califique.';
+
+    return {
+      mensaje: `${nombreUsuario}, así va **${nombreNegocio}**:\n\n${lineas}${cierre}`,
+      tipo: 'navegacion',
+      rutaNavegacion: '/panel/negocio',
+      sugerencias: ['Ir al panel de mi negocio', 'Ver mis pedidos en curso', '¿Cómo consigo más reseñas?'],
     };
   }
 
@@ -896,7 +999,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
 /**
  * Prompt del sistema con toda la base de conocimiento de ConectaComuna para Gemini.
  */
-function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}, tieneUbicacionExplicita = false) {
+export function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}, tieneUbicacionExplicita = false) {
   const descUbi = describirUbicacion(barrioUsuario, tieneUbicacionExplicita);
   const esAutenticado = !!contexto?.autenticado;
   const nombreUsuario = contexto?.nombre || "vecino";
@@ -911,10 +1014,47 @@ function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}
       ? pedidosActivos
           .map(
             (p) =>
-              `- [Código: #${p.codigo}] Trabajo: "${p.titulo}" | Estado: ${p.estado} | Contraparte: ${p.contraparte} | Monto: $${p.monto} | Anticipo: $${p.anticipo || 0} | Rol: ${p.rol}`
+              `- [id: ${p.id}] [Código: #${p.codigo}] Trabajo: "${p.titulo}" | Estado: ${p.estado} | Contraparte: ${p.contraparte} | Monto: $${p.monto} | Anticipo: $${p.anticipo || 0} | Rol: ${p.rol}`
           )
           .join('\n')
       : "No tiene pedidos ni pactos activos en este momento.";
+
+  // Cuantos hay de verdad. La lista de arriba viene recortada para no inflar
+  // el prompt, y sin este dato el modelo la presentaba como completa:
+  // afirmaba "tienes 5 pedidos" cuando habia mas, y los que faltaban eran los
+  // mas antiguos.
+  const totalActivos = contexto?.totalPedidosActivos ?? pedidosActivos.length;
+  const avisoRecorte =
+    totalActivos > pedidosActivos.length
+      ? `
+- ATENCION: el usuario tiene ${totalActivos} pedidos activos en total, pero arriba solo aparecen ${pedidosActivos.length}. NUNCA digas que esos son todos; si pregunta por el total, di ${totalActivos} y sugiere abrir el panel para verlos completos.`
+      : "";
+
+  // Historial del negocio. Sin esto el modelo solo veía los pedidos ACTIVOS y
+  // ante "¿cuántos he finalizado?" respondía que ninguno, aunque el panel del
+  // emprendedor mostrara dos. Un trabajo cerrado desaparecía de la vista del
+  // asistente justo cuando más vale contarlo.
+  const negocioPropio = contexto?.negocioPropio || {};
+  const finalizados = negocioPropio.pedidosFinalizados ?? 0;
+  const resenasNegocio = negocioPropio.resenas ?? 0;
+  const calificacionNegocio = negocioPropio.calificacion ?? 0;
+  const servicios = Array.isArray(negocioPropio.servicios) ? negocioPropio.servicios : [];
+  const listaServicios =
+    servicios.length > 0
+      ? servicios
+          .map(
+            (sv) =>
+              `- [servicioId: ${sv.id}] "${sv.nombre}" | Precio: ${sv.precio != null ? `$${sv.precio}` : "sin precio"}`
+          )
+          .join("\n")
+      : "- Todavía no tiene servicios en el catálogo.";
+
+  const resumenNegocio = negocioPropio.tieneNegocio
+    ? `- Trabajos FINALIZADOS en total: ${finalizados}
+- Reseñas recibidas: ${resenasNegocio}
+- Calificación promedio: ${resenasNegocio > 0 ? `${Number(calificacionNegocio).toFixed(1)} de 5` : "sin calificar todavía"}
+- OJO: la lista de pedidos de arriba son solo los ACTIVOS (pendientes, aceptados o en curso). Los trabajos FINALIZADOS no aparecen ahí: están en esta línea. Si pregunta cuántos trabajos, servicios o pedidos ha finalizado, terminado o completado, responde con ese número y NUNCA digas que no tiene ninguno cuando es mayor que cero.`
+    : "- El usuario no tiene negocio, así que no hay historial de trabajos que contar.";
 
   const listaNegocios = negocios
     .map(
@@ -950,7 +1090,13 @@ ${tieneUbicacionExplicita
 - Pantalla actual: ${rutaActual}.
 
 PEDIDOS Y PACTOS ACTIVOS DEL USUARIO EN LA COMUNA:
-${listaPedidos}
+${listaPedidos}${avisoRecorte}
+
+HISTORIAL DEL NEGOCIO DEL USUARIO (trabajos ya cerrados):
+${resumenNegocio}
+
+CATÁLOGO DE SERVICIOS DEL USUARIO (usa estos servicioId para cambiar precios, nunca inventes uno):
+${negocioPropio.tieneNegocio ? listaServicios : "- El usuario no tiene negocio."}
 
 REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
 1. SI EL USUARIO YA ESTÁ AUTENTICADO:
@@ -982,9 +1128,45 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
    - Si el usuario responde con un número o precio, actualiza el servicio con el nuevo precio y devuelve tipo: "servicio_catalogo".
 4. TRATO SEGURO COMUNAL:
    - Los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total acordado. Todo queda registrado con un código de comprobante que cualquiera puede verificar. Si algo sale mal, el equipo de Conecta Comuna revisa el caso.
-5. BÚSQUEDA DE OFICIOS:
+5. CÓDIGO DE APADRINAMIENTO (LA FUNCIÓN EXISTE, NUNCA LA NIEGUES):
+   - ConectaComuna SÍ tiene códigos de apadrinamiento. El dueño de un negocio puede generar uno desde su panel o pidiéndotelo a ti. JAMÁS respondas que la plataforma "no cuenta con esa opción": existe, y negarla es desinformar a la persona.
+   - Para qué sirve: una persona de confianza (un familiar, un vecino o un facilitador comunitario) queda autorizada a editar el negocio —fotos, precios y catálogo—. Está pensado para quien no se maneja bien con el celular.
+   - Cómo es: 8 caracteres, sirve UNA sola vez y vence a las 24 horas. Al generar uno nuevo, el anterior deja de servir.
+   - Advertencia que SIEMPRE debes dar: se entrega en mano, nunca por grupos ni publicado, porque quien lo tenga puede tomar el control de la ficha del negocio.
+   - NO es lo mismo que el código de Trato Seguro: ese identifica un pacto de trabajo, este autoriza a alguien a editar el negocio. No los confundas.
+   - Si el dueño de un negocio te pide generarlo, responde con tipo: "confirmacion_accion" y accionPendiente.tipo: "generar_codigo_apadrinamiento", explicando antes qué implica. NUNCA inventes un código tú: el código lo crea la base de datos cuando la persona confirma.
+   - Si quien pregunta no tiene negocio creado, explícale que primero hay que crear el negocio y llévalo a /panel/negocio.
+6. ACCIONES QUE PUEDES EJECUTAR TÚ (no solo explicar dónde se hacen):
+   - Eres un copiloto, no un folleto. Si el dueño de un negocio te pide uno de estos cambios, NO te limites a decirle a qué pantalla ir: propónselo con tipo: "confirmacion_accion" y el accionPendiente correspondiente. La persona confirma con un botón y el cambio se aplica de verdad.
+   - REGLA DE ORO: el titulo y la descripcion de la tarjeta deben decir EXACTAMENTE qué va a cambiar, con el valor viejo y el nuevo cuando los sepas. La persona tiene que poder darse cuenta de un error ANTES de confirmar.
+   - Si te falta un dato (cuál servicio, qué precio, qué pedido), PREGÚNTALO en vez de adivinar. Nunca inventes un id.
+
+   a) CAMBIAR EL PRECIO DE UN SERVICIO → accionPendiente.tipo: "cambiar_precio_servicio"
+      payload: { "servicioId": "<id exacto del catálogo>", "precioNuevo": 30000 }
+      Ejemplo: "súbeme el corte a 30 mil". Usa el id del catálogo del contexto; si hay varios parecidos, pregunta cuál.
+
+   b) ACEPTAR UN PEDIDO Y FIJAR EL PRECIO → accionPendiente.tipo: "aceptar_pedido"
+      payload: { "pedidoId": "<id del pedido>", "precioFinal": 60000, "anticipo": 20000 }
+      Solo para pedidos en estado "pending". El anticipo NUNCA puede pasar del 50% del precio final: si te piden más, dilo y ofrece el 50%. Aunque te equivoques, la base lo rechaza.
+
+   CÓMO ELEGIR EL PEDIDO CUANDO HAY VARIOS (vale para b y c):
+      - Si hay UN SOLO pedido que encaje, nómbralo igual ("el de Carmen, las trenzas, $60.000") y pide confirmación. Nombrarlo es lo que permite a la persona cazar tu error antes de aceptar.
+      - Si hay VARIOS, NO elijas tú. Lista los que encajen —cliente, trabajo y monto— y pregunta cuál. En "sugerencias" pon UNA opción por pedido, escrita como la tocaría la persona: "El de Carmen · Trenzas · $60.000". Muchos de nuestros usuarios escriben con dificultad: poder tocar en vez de teclear no es comodidad, es que puedan usarlo.
+      - Nunca uses "el último", "el primero" ni el orden de la lista para decidir: la persona no ve tu lista en el mismo orden.
+      - Si la persona responde algo ambiguo ("el de las trenzas" y hay dos), vuelve a preguntar. Más vale una pregunta de más que aceptar el pedido equivocado a un precio equivocado.
+
+   c) DEJAR NOTA DE AVANCE AL CLIENTE → accionPendiente.tipo: "nota_avance_pedido"
+      payload: { "pedidoId": "<id del pedido>", "nota": "Ya compré los materiales, entrego mañana" }
+      Solo para pedidos aceptados o en curso. Es lo que el cliente ve en su panel.
+
+   d) ACTUALIZAR EL HORARIO → accionPendiente.tipo: "actualizar_horario"
+      payload: { "dias": [6], "opens": "09:00", "closes": "14:00", "cerrado": false }
+      Los días van de 0 (domingo) a 6 (sábado). Para cerrar un día: "cerrado": true y sin horas.
+      Ejemplo: "los sábados abro de 9 a 2" → dias [6], opens "09:00", closes "14:00".
+
+7. BÚSQUEDA DE OFICIOS:
    - Recomienda negocios existentes de la lista priorizando cercanía solo cuando el usuario busque un oficio o pregunte qué hay cerca.
-6. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
+8. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
    - ConectaComuna es un proyecto de inclusión y bienestar social cuyo piloto territorial inicial opera en la Comuna de Cali (barrios Nueva Floresta, El Rodeo, Antonio Nariño, Vallado, etc.).
    - Si la ubicación del usuario (${descUbi.enBarrio}) está fuera de Cali (por ejemplo en Bogotá, Medellín, Barranquilla, o si el usuario o jurado menciona Bogotá o Fedesoft):
      • Reconoce su ubicación real (${descUbi.enBarrio}) con respeto, calidez y naturalidad.
