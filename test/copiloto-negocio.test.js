@@ -144,3 +144,79 @@ test("el prompt le prohibe al modelo negar que exista el apadrinamiento", () => 
   assert.match(prompt, /NUNCA LA NIEGUES/);
   assert.match(prompt, /NUNCA inventes un código tú/);
 });
+
+/**
+ * Para ACTUAR, el modelo necesita identificadores. Sin el servicioId no puede
+ * cambiar un precio y sin el id del pedido no puede aceptarlo ni dejarle una
+ * nota al cliente: sabria que existen, pero no sobre cual obrar. Una accion
+ * sin identificador es una accion que adivina, y adivinar aqui significa
+ * cambiarle el precio al servicio equivocado.
+ */
+
+test("el prompt lleva el catalogo con sus servicioId", () => {
+  const prompt = construirPromptSistema(
+    [],
+    "El Retiro",
+    3.42,
+    -76.52,
+    contextoNegocio({
+      servicios: [
+        { id: "svc-1", nombre: "Trenzas africanas", precio: 45000 },
+        { id: "svc-2", nombre: "Corte de cabello", precio: null },
+      ],
+    }),
+    true,
+  );
+  assert.match(prompt, /servicioId: svc-1/);
+  assert.match(prompt, /Trenzas africanas/);
+  assert.match(prompt, /\$45000/);
+  // Un servicio sin precio no debe salir como "$null".
+  assert.match(prompt, /sin precio/);
+  assert.doesNotMatch(prompt, /\$null/);
+});
+
+test("el prompt lleva el id de cada pedido, no solo su codigo", () => {
+  const contexto = contextoNegocio();
+  contexto.pedidosActivos = [
+    {
+      id: "ord-abc",
+      codigo: "CC-ABC123",
+      titulo: "Trenzas para quinceañera",
+      estado: "pending",
+      monto: 60000,
+      anticipo: 0,
+      contraparte: "Carmen",
+      rol: "comerciante",
+    },
+  ];
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contexto, true);
+  assert.match(prompt, /id: ord-abc/);
+  assert.match(prompt, /CC-ABC123/);
+});
+
+test("el prompt declara las cuatro acciones ejecutables", () => {
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
+  for (const accion of [
+    "cambiar_precio_servicio",
+    "aceptar_pedido",
+    "nota_avance_pedido",
+    "actualizar_horario",
+  ]) {
+    assert.match(prompt, new RegExp(accion));
+  }
+  // El tope del anticipo se le recuerda al modelo aunque la base lo imponga.
+  assert.match(prompt, /NUNCA puede pasar del 50%/);
+  assert.match(prompt, /nunca inventes uno|Nunca inventes un id/);
+});
+
+test("sin catalogo el prompt lo dice en vez de dejar el bloque vacio", () => {
+  const prompt = construirPromptSistema(
+    [],
+    "El Retiro",
+    3.42,
+    -76.52,
+    contextoNegocio({ servicios: [] }),
+    true,
+  );
+  assert.match(prompt, /Todavía no tiene servicios en el catálogo/);
+});

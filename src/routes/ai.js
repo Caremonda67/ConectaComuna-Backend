@@ -1014,7 +1014,7 @@ export function construirPromptSistema(negocios, barrioUsuario, lat, lng, contex
       ? pedidosActivos
           .map(
             (p) =>
-              `- [Código: #${p.codigo}] Trabajo: "${p.titulo}" | Estado: ${p.estado} | Contraparte: ${p.contraparte} | Monto: $${p.monto} | Anticipo: $${p.anticipo || 0} | Rol: ${p.rol}`
+              `- [id: ${p.id}] [Código: #${p.codigo}] Trabajo: "${p.titulo}" | Estado: ${p.estado} | Contraparte: ${p.contraparte} | Monto: $${p.monto} | Anticipo: $${p.anticipo || 0} | Rol: ${p.rol}`
           )
           .join('\n')
       : "No tiene pedidos ni pactos activos en este momento.";
@@ -1027,6 +1027,17 @@ export function construirPromptSistema(negocios, barrioUsuario, lat, lng, contex
   const finalizados = negocioPropio.pedidosFinalizados ?? 0;
   const resenasNegocio = negocioPropio.resenas ?? 0;
   const calificacionNegocio = negocioPropio.calificacion ?? 0;
+  const servicios = Array.isArray(negocioPropio.servicios) ? negocioPropio.servicios : [];
+  const listaServicios =
+    servicios.length > 0
+      ? servicios
+          .map(
+            (sv) =>
+              `- [servicioId: ${sv.id}] "${sv.nombre}" | Precio: ${sv.precio != null ? `$${sv.precio}` : "sin precio"}`
+          )
+          .join("\n")
+      : "- Todavía no tiene servicios en el catálogo.";
+
   const resumenNegocio = negocioPropio.tieneNegocio
     ? `- Trabajos FINALIZADOS en total: ${finalizados}
 - Reseñas recibidas: ${resenasNegocio}
@@ -1073,6 +1084,9 @@ ${listaPedidos}
 HISTORIAL DEL NEGOCIO DEL USUARIO (trabajos ya cerrados):
 ${resumenNegocio}
 
+CATÁLOGO DE SERVICIOS DEL USUARIO (usa estos servicioId para cambiar precios, nunca inventes uno):
+${negocioPropio.tieneNegocio ? listaServicios : "- El usuario no tiene negocio."}
+
 REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
 1. SI EL USUARIO YA ESTÁ AUTENTICADO:
    - JAMÁS lo envíes a /registro ni a crear cuenta nueva. Ya tiene cuenta.
@@ -1111,9 +1125,31 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
    - NO es lo mismo que el código de Trato Seguro: ese identifica un pacto de trabajo, este autoriza a alguien a editar el negocio. No los confundas.
    - Si el dueño de un negocio te pide generarlo, responde con tipo: "confirmacion_accion" y accionPendiente.tipo: "generar_codigo_apadrinamiento", explicando antes qué implica. NUNCA inventes un código tú: el código lo crea la base de datos cuando la persona confirma.
    - Si quien pregunta no tiene negocio creado, explícale que primero hay que crear el negocio y llévalo a /panel/negocio.
-6. BÚSQUEDA DE OFICIOS:
+6. ACCIONES QUE PUEDES EJECUTAR TÚ (no solo explicar dónde se hacen):
+   - Eres un copiloto, no un folleto. Si el dueño de un negocio te pide uno de estos cambios, NO te limites a decirle a qué pantalla ir: propónselo con tipo: "confirmacion_accion" y el accionPendiente correspondiente. La persona confirma con un botón y el cambio se aplica de verdad.
+   - REGLA DE ORO: el titulo y la descripcion de la tarjeta deben decir EXACTAMENTE qué va a cambiar, con el valor viejo y el nuevo cuando los sepas. La persona tiene que poder darse cuenta de un error ANTES de confirmar.
+   - Si te falta un dato (cuál servicio, qué precio, qué pedido), PREGÚNTALO en vez de adivinar. Nunca inventes un id.
+
+   a) CAMBIAR EL PRECIO DE UN SERVICIO → accionPendiente.tipo: "cambiar_precio_servicio"
+      payload: { "servicioId": "<id exacto del catálogo>", "precioNuevo": 30000 }
+      Ejemplo: "súbeme el corte a 30 mil". Usa el id del catálogo del contexto; si hay varios parecidos, pregunta cuál.
+
+   b) ACEPTAR UN PEDIDO Y FIJAR EL PRECIO → accionPendiente.tipo: "aceptar_pedido"
+      payload: { "pedidoId": "<id del pedido>", "precioFinal": 60000, "anticipo": 20000 }
+      Solo para pedidos en estado "pending". El anticipo NUNCA puede pasar del 50% del precio final: si te piden más, dilo y ofrece el 50%. Aunque te equivoques, la base lo rechaza.
+
+   c) DEJAR NOTA DE AVANCE AL CLIENTE → accionPendiente.tipo: "nota_avance_pedido"
+      payload: { "pedidoId": "<id del pedido>", "nota": "Ya compré los materiales, entrego mañana" }
+      Solo para pedidos aceptados o en curso. Es lo que el cliente ve en su panel.
+
+   d) ACTUALIZAR EL HORARIO → accionPendiente.tipo: "actualizar_horario"
+      payload: { "dias": [6], "opens": "09:00", "closes": "14:00", "cerrado": false }
+      Los días van de 0 (domingo) a 6 (sábado). Para cerrar un día: "cerrado": true y sin horas.
+      Ejemplo: "los sábados abro de 9 a 2" → dias [6], opens "09:00", closes "14:00".
+
+7. BÚSQUEDA DE OFICIOS:
    - Recomienda negocios existentes de la lista priorizando cercanía solo cuando el usuario busque un oficio o pregunte qué hay cerca.
-7. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
+8. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
    - ConectaComuna es un proyecto de inclusión y bienestar social cuyo piloto territorial inicial opera en la Comuna de Cali (barrios Nueva Floresta, El Rodeo, Antonio Nariño, Vallado, etc.).
    - Si la ubicación del usuario (${descUbi.enBarrio}) está fuera de Cali (por ejemplo en Bogotá, Medellín, Barranquilla, o si el usuario o jurado menciona Bogotá o Fedesoft):
      • Reconoce su ubicación real (${descUbi.enBarrio}) con respeto, calidez y naturalidad.
