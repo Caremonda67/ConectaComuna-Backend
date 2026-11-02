@@ -138,6 +138,26 @@ async function obtenerNegociosComuna() {
  * Motor local inteligente y con memoria de contexto multi-turno.
  * Garantiza respuestas naturales y útiles para todas las sugerencias y flujos del sistema.
  */
+/**
+ * Lee un monto en pesos de una frase, como lo diria una persona del barrio.
+ *
+ * "30 mil", "30.000" y "30" quieren decir lo mismo. El punto es separador de
+ * miles en Colombia, nunca decimal, y un numero suelto menor a mil se
+ * entiende como miles: nadie cobra 30 pesos por un corte.
+ *
+ * Devuelve null si no hay monto reconocible, y eso importa: la version
+ * anterior tomaba cualquier numero de la frase, asi que "cambia el precio del
+ * servicio 2" acababa poniendo un precio de $2.000.
+ */
+export function leerMonto(texto) {
+  const m = String(texto).match(/(\d{1,3}(?:\.\d{3})+|\d+)\s*(mil|lucas)?/u);
+  if (!m) return null;
+  const crudo = parseInt(m[1].replace(/\./gu, ""), 10);
+  if (!Number.isFinite(crudo) || crudo <= 0) return null;
+  if (m[2]) return crudo * 1000;
+  return crudo < 1000 ? crudo * 1000 : crudo;
+}
+
 export function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
   const texto = mensaje.toLowerCase().trim();
   const tieneUbicacionExplicita = !!(
@@ -559,46 +579,127 @@ export function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historia
     };
   }
 
-  // 7. Intención de cambiar el precio
+  // 7 y 8. Cambiar el precio de un servicio que YA existe.
+  //
+  // El flujo anterior era falso de arriba abajo: contestaba "¡Precio
+  // actualizado! He guardado este cambio en la ficha" sin guardar nada, y
+  // ofrecía una tarjeta con un servicio inventado llamado "Servicio de oficio
+  // comunal". Al confirmar no editaba el precio: creaba un producto NUEVO sin
+  // nombre. Quien lo usaba acababa con el catálogo sucio creyendo que había
+  // cambiado una tarifa.
+  // Si la pregunta anterior fue "¿A qué valor dejo X?" y ahora solo llega un
+  // monto, es la respuesta a esa pregunta. Sin esto la conversación perdía el
+  // hilo: el asistente preguntaba el precio, la persona tocaba "$40.000" y
+  // recibía una respuesta genérica, con el cambio sin hacer.
+  const preguntoPorValorDe = ultimoMensajeBot.match(/a qué valor dejo "(.+?)"/u);
+
   const esPeticionCambiarPrecio =
-    texto === "cambiar el precio" ||
     texto.includes("cambiar el precio") ||
     texto.includes("cambiar precio") ||
+    texto.includes("cámbiale el precio") ||
+    texto.includes("cambiale el precio") ||
     texto.includes("modificar precio") ||
     texto.includes("ajustar precio") ||
     texto.includes("otro precio") ||
-    texto.includes("cambiar valor");
+    texto.includes("cambiar valor") ||
+    texto.includes("subir el precio") ||
+    texto.includes("bajar el precio") ||
+    /\b(sube|súbe|subir|baja|bája|bajar|ponle|pon|cobrar|cobro)\b[^]*\d/u.test(texto);
 
-  if (esPeticionCambiarPrecio) {
+  if ((esPeticionCambiarPrecio || preguntoPorValorDe) && esEmprendedor) {
+    if (!tieneNegocio) {
+      return {
+        mensaje:
+          "Para manejar precios primero hay que crear tu negocio y su catálogo de servicios.",
+        tipo: "navegacion",
+        rutaNavegacion: "/panel/negocio",
+        sugerencias: ["Crear mi negocio"],
+      };
+    }
+
+    const serviciosPropios = Array.isArray(contexto?.negocioPropio?.servicios)
+      ? contexto.negocioPropio.servicios
+      : [];
+
+    if (serviciosPropios.length === 0) {
+      return {
+        mensaje: `${nombreUsuario}, todavía no tienes servicios en el catálogo de ${nombreNegocio}, así que no hay precio que cambiar. Dime qué haces y cuánto cobras y lo agregamos.`,
+        tipo: "conversacion",
+        sugerencias: ["🎙️ Dictar mi servicio para el catálogo", "Ir al panel de mi negocio"],
+      };
+    }
+
+    const precioNuevo = leerMonto(texto);
+
+    // Cuál servicio: por el nombre dentro de lo que dijo la persona. Si hay
+    // empate o no se reconoce ninguno NO se elige: cambiar el precio del
+    // servicio equivocado es un error real en la ficha que ven los vecinos.
+    // El servicio del que veniamos hablando, si la pregunta anterior lo nombro.
+    const servicioEnCurso = preguntoPorValorDe
+      ? serviciosPropios.find(
+          (sv) => String(sv.nombre || "").toLowerCase() === preguntoPorValorDe[1].toLowerCase()
+        )
+      : undefined;
+
+    const candidatos = serviciosPropios.filter((sv) => {
+      const palabras = String(sv.nombre || "")
+        .toLowerCase()
+        .split(/\s+/u)
+        .filter((w) => w.length > 3);
+      return palabras.some((w) => texto.includes(w));
+    });
+    const elegido =
+      servicioEnCurso ??
+      (candidatos.length === 1
+        ? candidatos[0]
+        : candidatos.length === 0 && serviciosPropios.length === 1
+          ? serviciosPropios[0]
+          : null);
+
+    if (!elegido) {
+      const cuales = candidatos.length > 1 ? candidatos : serviciosPropios;
+      return {
+        mensaje: `¿A cuál servicio le cambio el precio?\n\n${cuales
+          .map(
+            (sv) =>
+              `• ${sv.nombre}${sv.precio ? ` — $ ${Number(sv.precio).toLocaleString("es-CO")}` : " — sin precio"}`
+          )
+          .join("\n")}`,
+        tipo: "conversacion",
+        sugerencias: cuales.slice(0, 4).map((sv) => `Cambiar el precio de ${sv.nombre}`),
+      };
+    }
+
+    if (precioNuevo === null) {
+      return {
+        mensaje: `¿A qué valor dejo "${elegido.nombre}"?${
+          elegido.precio ? ` Ahora está en $ ${Number(elegido.precio).toLocaleString("es-CO")}.` : ""
+        }`,
+        tipo: "conversacion",
+        sugerencias: ["$15.000", "$20.000", "$30.000", "$40.000"],
+      };
+    }
+
+    const antes = elegido.precio
+      ? `De $ ${Number(elegido.precio).toLocaleString("es-CO")}`
+      : "Sin precio";
+
     return {
-      mensaje: `¿A qué valor deseas cambiar el precio de tu servicio? Dime el nuevo monto (por ejemplo: "30 mil pesos") o toca uno de los valores rápidos:`,
-      tipo: "conversacion",
-      sugerencias: ["$15.000", "$20.000", "$30.000", "$40.000"],
-    };
-  }
-
-  // 8. Respuesta con un nuevo monto tras pedir cambio de precio
-  const precioSoloMatch = texto.match(/\b(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:mil|pesos|\$)?\b/);
-  const contextoPrevioPidePrecio =
-    ultimoMensajeBot.includes("precio") ||
-    ultimoMensajeBot.includes("monto") ||
-    ultimoMensajeBot.includes("valor") ||
-    ultimoMensajeBot.includes("servicio identificado");
-
-  if (precioSoloMatch && contextoPrevioPidePrecio && !texto.includes("vendo") && !texto.includes("hago")) {
-    const num = parseInt(precioSoloMatch[1].replace(/\./g, ""), 10);
-    const nuevoPrecio = num < 1000 ? num * 1000 : num;
-
-    return {
-      mensaje: `¡Precio actualizado a $${nuevoPrecio.toLocaleString("es-CO")} COP! He guardado este cambio en la ficha. Cuando quieras puedes guardarlo en tu catálogo:`,
-      tipo: "servicio_catalogo",
-      servicio: {
-        titulo: "Servicio de oficio comunal",
-        descripcion: "Tarifa ajustada según solicitud",
-        precioSugerido: nuevoPrecio,
-        categoria: "costura",
+      mensaje: `Voy a dejar "${elegido.nombre}" en $ ${precioNuevo.toLocaleString("es-CO")}${
+        elegido.precio
+          ? `, en vez de los $ ${Number(elegido.precio).toLocaleString("es-CO")} que tiene ahora`
+          : ""
+      }. ¿Lo cambio?`,
+      tipo: "confirmacion_accion",
+      accionPendiente: {
+        tipo: "cambiar_precio_servicio",
+        titulo: `Cambiar el precio de "${elegido.nombre}"`,
+        descripcion: `${antes} a $ ${precioNuevo.toLocaleString("es-CO")}. Así se verá en tu ficha del directorio.`,
+        payload: { servicioId: elegido.id, precioNuevo },
+        botonConfirmar: "✅ Sí, cambiar el precio",
+        botonCancelar: "❌ Ahora no",
       },
-      sugerencias: ["Guardar en mi catálogo", "Cambiar el precio", "¿Cómo funciona el anticipo?"],
+      sugerencias: ["✅ Sí, cambiar el precio", "❌ Ahora no"],
     };
   }
 
@@ -1123,9 +1224,12 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
    - Solo genera tipo: "servicio_catalogo" cuando el usuario REALMENTE describa su oficio o producto con detalles y precio.
    - NUNCA digas que ya guardaste, registraste o publicaste el servicio, ni que los vecinos ya pueden encontrarlo. La tarjeta es un borrador y solo queda publicado cuando la persona toca el botón. Di que así entendiste el oficio y el precio, y pídele que confirme.
    - Revisa "Negocio propio" en el contexto: si no tiene negocio creado, explícale en una frase sencilla que para publicarlo primero hay que crear su negocio, y que el botón de abajo lo lleva. Si ya tiene negocio, dile que confirme para agregarlo a su catálogo.
-3. CAMBIO DE PRECIO:
-   - Si el usuario dice "Cambiar el precio", NO recomiendes negocios. Pregúntale a qué nuevo valor desea ajustarlo.
-   - Si el usuario responde con un número o precio, actualiza el servicio con el nuevo precio y devuelve tipo: "servicio_catalogo".
+3. CAMBIO DE PRECIO DE UN SERVICIO QUE YA EXISTE:
+   - DISTINGUE DOS COSAS. Cambiar el precio de un servicio que ya está en el catálogo NO es lo mismo que crear uno nuevo. Confundirlas dejaba al usuario con un producto duplicado sin nombre y la tarifa vieja intacta.
+   - Si pide cambiar, subir o bajar el precio de algo que ya tiene en el catálogo: usa la acción "cambiar_precio_servicio" con su servicioId (seccion 6a). NUNCA devuelvas tipo "servicio_catalogo" para esto: ese tipo crea un servicio NUEVO.
+   - "servicio_catalogo" es solo para dar de alta un oficio que todavía no existe en su catálogo.
+   - Si no dice cuál servicio y tiene varios, pregúntale cuál antes de proponer nada. Si no dice el monto, pregúntale el monto. Nunca supongas ninguno de los dos.
+   - JAMÁS escribas "precio actualizado" ni "ya guardé el cambio": no has cambiado nada hasta que la persona toca el botón de la tarjeta.
 4. TRATO SEGURO COMUNAL:
    - Los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total acordado. Todo queda registrado con un código de comprobante que cualquiera puede verificar. Si algo sale mal, el equipo de Conecta Comuna revisa el caso.
 5. CÓDIGO DE APADRINAMIENTO (LA FUNCIÓN EXISTE, NUNCA LA NIEGUES):
