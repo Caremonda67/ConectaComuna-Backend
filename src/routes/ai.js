@@ -218,6 +218,54 @@ export function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historia
     };
   }
 
+  // 0b-ter. Código de apadrinamiento.
+  //
+  // El asistente respondió que ConectaComuna «no cuenta con una opción para
+  // generar códigos de apadrinamiento», con el botón que lo genera visible en
+  // el panel de la misma persona. Inventó una limitación del producto, que es
+  // la peor clase de error de un copiloto. La palabra no aparecía en ninguno
+  // de los dos motores, así que el modelo improvisaba.
+  if (
+    texto.includes('apadrinamiento') ||
+    texto.includes('apadrinar') ||
+    texto.includes('apadrina') ||
+    ((texto.includes('codigo') || texto.includes('código')) && texto.includes('facilitador'))
+  ) {
+    if (!esAutenticado) {
+      return {
+        mensaje:
+          'El código de apadrinamiento lo genera el dueño del negocio desde su cuenta. Ingresa y te muestro cómo.',
+        tipo: 'navegacion',
+        rutaNavegacion: '/entrar',
+        sugerencias: ['Ingresar a mi cuenta', '¿Qué es un facilitador?'],
+      };
+    }
+
+    if (!tieneNegocio) {
+      return {
+        mensaje:
+          'El código de apadrinamiento sirve para que alguien de confianza te ayude a manejar tu negocio en la plataforma. Para generarlo primero hay que crear tu negocio.',
+        tipo: 'navegacion',
+        rutaNavegacion: '/panel/negocio',
+        sugerencias: ['Crear mi negocio', '¿Qué es un facilitador?'],
+      };
+    }
+
+    return {
+      mensaje: `${nombreUsuario}, sí se puede: el código de apadrinamiento deja que una persona de confianza —un familiar, un vecino o tu facilitador comunitario— edite las fotos, los precios y el catálogo de ${nombreNegocio}.\n\nSon 8 caracteres, sirve una sola vez y vence en 24 horas. Se entrega en mano, nunca por grupos: quien lo tenga puede tomar el control de tu ficha.\n\n¿Te lo genero ahora?`,
+      tipo: 'confirmacion_accion',
+      accionPendiente: {
+        tipo: 'generar_codigo_apadrinamiento',
+        titulo: 'Generar código de apadrinamiento',
+        descripcion:
+          'Crea un código de un solo uso, válido 24 horas, para que alguien de confianza pueda editar tu negocio. El código anterior deja de servir.',
+        botonConfirmar: '✅ Sí, generar el código',
+        botonCancelar: '❌ Ahora no',
+      },
+      sugerencias: ['✅ Sí, generar el código', '¿Qué puede hacer un facilitador?'],
+    };
+  }
+
   // 0b-bis. Cómo le va al negocio: trabajos finalizados, calificación, reseñas.
   //
   // Va ANTES de la consulta de pedidos a propósito. La de abajo solo mira
@@ -1055,9 +1103,17 @@ REGLAS DE INTERACCIÓN Y COMPORTAMIENTO:
    - Si el usuario responde con un número o precio, actualiza el servicio con el nuevo precio y devuelve tipo: "servicio_catalogo".
 4. TRATO SEGURO COMUNAL:
    - Los anticipos para materiales o repuestos NUNCA pueden superar el 50% del total acordado. Todo queda registrado con un código de comprobante que cualquiera puede verificar. Si algo sale mal, el equipo de Conecta Comuna revisa el caso.
-5. BÚSQUEDA DE OFICIOS:
+5. CÓDIGO DE APADRINAMIENTO (LA FUNCIÓN EXISTE, NUNCA LA NIEGUES):
+   - ConectaComuna SÍ tiene códigos de apadrinamiento. El dueño de un negocio puede generar uno desde su panel o pidiéndotelo a ti. JAMÁS respondas que la plataforma "no cuenta con esa opción": existe, y negarla es desinformar a la persona.
+   - Para qué sirve: una persona de confianza (un familiar, un vecino o un facilitador comunitario) queda autorizada a editar el negocio —fotos, precios y catálogo—. Está pensado para quien no se maneja bien con el celular.
+   - Cómo es: 8 caracteres, sirve UNA sola vez y vence a las 24 horas. Al generar uno nuevo, el anterior deja de servir.
+   - Advertencia que SIEMPRE debes dar: se entrega en mano, nunca por grupos ni publicado, porque quien lo tenga puede tomar el control de la ficha del negocio.
+   - NO es lo mismo que el código de Trato Seguro: ese identifica un pacto de trabajo, este autoriza a alguien a editar el negocio. No los confundas.
+   - Si el dueño de un negocio te pide generarlo, responde con tipo: "confirmacion_accion" y accionPendiente.tipo: "generar_codigo_apadrinamiento", explicando antes qué implica. NUNCA inventes un código tú: el código lo crea la base de datos cuando la persona confirma.
+   - Si quien pregunta no tiene negocio creado, explícale que primero hay que crear el negocio y llévalo a /panel/negocio.
+6. BÚSQUEDA DE OFICIOS:
    - Recomienda negocios existentes de la lista priorizando cercanía solo cuando el usuario busque un oficio o pregunte qué hay cerca.
-6. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
+7. CONTEXTO TERRITORIAL Y CIUDADES (CALI vs BOGOTÁ / OTRAS REGIONES):
    - ConectaComuna es un proyecto de inclusión y bienestar social cuyo piloto territorial inicial opera en la Comuna de Cali (barrios Nueva Floresta, El Rodeo, Antonio Nariño, Vallado, etc.).
    - Si la ubicación del usuario (${descUbi.enBarrio}) está fuera de Cali (por ejemplo en Bogotá, Medellín, Barranquilla, o si el usuario o jurado menciona Bogotá o Fedesoft):
      • Reconoce su ubicación real (${descUbi.enBarrio}) con respeto, calidez y naturalidad.

@@ -103,3 +103,44 @@ test("sin negocio el prompt no inventa historial", () => {
   assert.doesNotMatch(prompt, /Trabajos FINALIZADOS en total: \d/);
   assert.doesNotMatch(prompt, /NUNCA digas que no tiene ninguno/);
 });
+
+/**
+ * El asistente respondio que la plataforma "no cuenta con una opcion para
+ * generar codigos de apadrinamiento", con el boton que lo genera visible en
+ * el panel de esa misma persona. Inventar una limitacion del producto es peor
+ * que no saber: la persona se va creyendo que no se puede.
+ */
+
+test("ofrece generar el codigo de apadrinamiento en vez de negar que exista", () => {
+  const r = motorRespaldoLocal(
+    "generame un codigo de apadrinamiento",
+    null,
+    [],
+    [],
+    contextoNegocio({ pedidosFinalizados: 2 }),
+  );
+  assert.equal(r.tipo, "confirmacion_accion");
+  assert.equal(r.accionPendiente.tipo, "generar_codigo_apadrinamiento");
+  assert.doesNotMatch(r.mensaje, /no (contamos|tenemos|hay)/i);
+  // La advertencia de seguridad no es opcional: quien tenga el codigo puede
+  // tomar el control de la ficha.
+  assert.match(r.mensaje, /en mano|nunca por grupos/i);
+});
+
+test("sin negocio no ofrece el codigo, lleva a crear el negocio", () => {
+  const r = motorRespaldoLocal("como genero un codigo de apadrinamiento", null, [], [], {
+    autenticado: true,
+    nombre: "Carmen",
+    tipoCuenta: "client",
+    negocioPropio: { tieneNegocio: false },
+    pedidosActivos: [],
+  });
+  assert.equal(r.tipo, "navegacion");
+  assert.match(r.rutaNavegacion, /panel\/negocio/);
+});
+
+test("el prompt le prohibe al modelo negar que exista el apadrinamiento", () => {
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
+  assert.match(prompt, /NUNCA LA NIEGUES/);
+  assert.match(prompt, /NUNCA inventes un código tú/);
+});
