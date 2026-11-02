@@ -138,7 +138,7 @@ async function obtenerNegociosComuna() {
  * Motor local inteligente y con memoria de contexto multi-turno.
  * Garantiza respuestas naturales y útiles para todas las sugerencias y flujos del sistema.
  */
-function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
+export function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [], contexto = {}) {
   const texto = mensaje.toLowerCase().trim();
   const tieneUbicacionExplicita = !!(
     ubicacionUsuario?.esDefinida && ubicacionUsuario?.barrio && ubicacionUsuario.barrio !== "Comuna"
@@ -215,6 +215,61 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
       mensaje: `Entendido, ${nombreUsuario}. Tu cuenta continúa en rol de Cliente para buscar, consultar y contactar los mejores oficios de la comuna. ¿En qué te colaboro hoy?`,
       tipo: 'conversacion',
       sugerencias: ['Oficios cerca de mí', 'Ver en el mapa', '¿Cómo funciona el Trato Seguro?'],
+    };
+  }
+
+  // 0b-bis. Cómo le va al negocio: trabajos finalizados, calificación, reseñas.
+  //
+  // Va ANTES de la consulta de pedidos a propósito. La de abajo solo mira
+  // `pedidosActivos`, que trae pendientes, aceptados y en curso: los
+  // finalizados quedan fuera por definición. Preguntar "¿cuántos pedidos he
+  // finalizado?" caía ahí y respondía que ninguno aunque el panel mostrara
+  // dos. Para un emprendedor esa respuesta no es un detalle: es el asistente
+  // diciéndole que su trabajo no existe.
+  const esConsultaDesempeno =
+    texto.includes('finalizado') ||
+    texto.includes('finalizados') ||
+    texto.includes('terminado') ||
+    texto.includes('terminados') ||
+    texto.includes('completado') ||
+    texto.includes('completados') ||
+    texto.includes('cuántos trabajos') ||
+    texto.includes('cuantos trabajos') ||
+    texto.includes('cuántos pedidos') ||
+    texto.includes('cuantos pedidos') ||
+    texto.includes('cuántos servicios') ||
+    texto.includes('cuantos servicios') ||
+    texto.includes('mi calificación') ||
+    texto.includes('mi calificacion') ||
+    texto.includes('mis reseñas') ||
+    texto.includes('mis resenas') ||
+    texto.includes('cómo va mi negocio') ||
+    texto.includes('como va mi negocio');
+
+  if (esConsultaDesempeno && esEmprendedor && tieneNegocio) {
+    const finalizados = contexto?.negocioPropio?.pedidosFinalizados ?? 0;
+    const resenas = contexto?.negocioPropio?.resenas ?? 0;
+    const calificacion = contexto?.negocioPropio?.calificacion ?? 0;
+    const activos = Array.isArray(contexto?.pedidosActivos) ? contexto.pedidosActivos.length : 0;
+
+    const lineas = [
+      `• Trabajos finalizados: **${finalizados}**`,
+      `• Trabajos en curso ahora: **${activos}**`,
+      resenas > 0
+        ? `• Calificación: **${Number(calificacion).toFixed(1)}** de 5, con ${resenas} ${resenas === 1 ? 'reseña' : 'reseñas'}`
+        : '• Todavía no tienes reseñas. Llegan cuando el cliente califica un trabajo finalizado.',
+    ].join('\n');
+
+    const cierre =
+      finalizados === 0
+        ? '\n\nTodavía no has cerrado ningún trabajo por la plataforma. Un pedido cuenta como finalizado cuando lo marcas así desde tu panel: ahí se suma a tu historial y el cliente puede calificarte.'
+        : '\n\nCada trabajo que marcas como finalizado suma a tu historial y habilita que el cliente te califique.';
+
+    return {
+      mensaje: `${nombreUsuario}, así va **${nombreNegocio}**:\n\n${lineas}${cierre}`,
+      tipo: 'navegacion',
+      rutaNavegacion: '/panel/negocio',
+      sugerencias: ['Ir al panel de mi negocio', 'Ver mis pedidos en curso', '¿Cómo consigo más reseñas?'],
     };
   }
 
@@ -896,7 +951,7 @@ function motorRespaldoLocal(mensaje, ubicacionUsuario, negocios, historial = [],
 /**
  * Prompt del sistema con toda la base de conocimiento de ConectaComuna para Gemini.
  */
-function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}, tieneUbicacionExplicita = false) {
+export function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}, tieneUbicacionExplicita = false) {
   const descUbi = describirUbicacion(barrioUsuario, tieneUbicacionExplicita);
   const esAutenticado = !!contexto?.autenticado;
   const nombreUsuario = contexto?.nombre || "vecino";
@@ -915,6 +970,21 @@ function construirPromptSistema(negocios, barrioUsuario, lat, lng, contexto = {}
           )
           .join('\n')
       : "No tiene pedidos ni pactos activos en este momento.";
+
+  // Historial del negocio. Sin esto el modelo solo veía los pedidos ACTIVOS y
+  // ante "¿cuántos he finalizado?" respondía que ninguno, aunque el panel del
+  // emprendedor mostrara dos. Un trabajo cerrado desaparecía de la vista del
+  // asistente justo cuando más vale contarlo.
+  const negocioPropio = contexto?.negocioPropio || {};
+  const finalizados = negocioPropio.pedidosFinalizados ?? 0;
+  const resenasNegocio = negocioPropio.resenas ?? 0;
+  const calificacionNegocio = negocioPropio.calificacion ?? 0;
+  const resumenNegocio = negocioPropio.tieneNegocio
+    ? `- Trabajos FINALIZADOS en total: ${finalizados}
+- Reseñas recibidas: ${resenasNegocio}
+- Calificación promedio: ${resenasNegocio > 0 ? `${Number(calificacionNegocio).toFixed(1)} de 5` : "sin calificar todavía"}
+- OJO: la lista de pedidos de arriba son solo los ACTIVOS (pendientes, aceptados o en curso). Los trabajos FINALIZADOS no aparecen ahí: están en esta línea. Si pregunta cuántos trabajos, servicios o pedidos ha finalizado, terminado o completado, responde con ese número y NUNCA digas que no tiene ninguno cuando es mayor que cero.`
+    : "- El usuario no tiene negocio, así que no hay historial de trabajos que contar.";
 
   const listaNegocios = negocios
     .map(
@@ -951,6 +1021,9 @@ ${tieneUbicacionExplicita
 
 PEDIDOS Y PACTOS ACTIVOS DEL USUARIO EN LA COMUNA:
 ${listaPedidos}
+
+HISTORIAL DEL NEGOCIO DEL USUARIO (trabajos ya cerrados):
+${resumenNegocio}
 
 REGLAS ESTRICTAS DE CONTEXTO Y SEGURIDAD LÓGICA:
 1. SI EL USUARIO YA ESTÁ AUTENTICADO:
