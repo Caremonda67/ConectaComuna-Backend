@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 process.env.SUPABASE_URL = "https://ejemplo.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "clave-de-prueba";
 
-const { motorRespaldoLocal, construirPromptSistema } = await import("../src/routes/ai.js");
+const { motorRespaldoLocal, construirPromptSistema, leerMonto } = await import("../src/routes/ai.js");
 
 /**
  * El copiloto le decía a una emprendedora que no había finalizado ningún
@@ -314,4 +314,104 @@ test("le prohibe afirmar que ya ejecuto el cambio", () => {
   assert.match(prompt, /Sin ese objeto no se ejecuta nada/);
   // Y que lo pida en futuro, no en pasado.
   assert.match(prompt, /nunca "Ya lo acepté"/);
+});
+
+/**
+ * Auditoria del cambio de precio.
+ *
+ * El flujo anterior contestaba "¡Precio actualizado! He guardado este cambio
+ * en la ficha" sin guardar nada, y al confirmar creaba un producto NUEVO sin
+ * nombre en vez de editar el que ya existia.
+ */
+
+const CATALOGO = [
+  { id: "svc-1", nombre: "Trenzas africanas", precio: 45000 },
+  { id: "svc-2", nombre: "Corte de cabello", precio: 18000 },
+];
+
+test("cambiar precio propone la accion real, no un servicio nuevo", () => {
+  const r = motorRespaldoLocal(
+    "cambiale el precio a las trenzas a 50 mil",
+    null,
+    [],
+    [],
+    contextoNegocio({ servicios: CATALOGO }),
+  );
+  assert.equal(r.tipo, "confirmacion_accion");
+  assert.equal(r.accionPendiente.tipo, "cambiar_precio_servicio");
+  assert.deepEqual(r.accionPendiente.payload, { servicioId: "svc-1", precioNuevo: 50000 });
+  assert.notEqual(r.tipo, "servicio_catalogo");
+  assert.doesNotMatch(r.mensaje, /Precio actualizado|He guardado/);
+});
+
+test("la tarjeta dice el precio viejo y el nuevo", () => {
+  const r = motorRespaldoLocal(
+    "sube el corte a 25 mil",
+    null,
+    [],
+    [],
+    contextoNegocio({ servicios: CATALOGO }),
+  );
+  assert.match(r.accionPendiente.descripcion, /18\.000/);
+  assert.match(r.accionPendiente.descripcion, /25\.000/);
+});
+
+test("con dos servicios y sin decir cual, pregunta en vez de elegir", () => {
+  const r = motorRespaldoLocal(
+    "cambiar el precio a 30 mil",
+    null,
+    [],
+    [],
+    contextoNegocio({ servicios: CATALOGO }),
+  );
+  assert.equal(r.tipo, "conversacion");
+  assert.equal(r.accionPendiente, undefined);
+  assert.match(r.mensaje, /Trenzas africanas/);
+  assert.match(r.mensaje, /Corte de cabello/);
+});
+
+test("sin catalogo no ofrece cambiar nada", () => {
+  const r = motorRespaldoLocal(
+    "cambiar el precio a 30 mil",
+    null,
+    [],
+    [],
+    contextoNegocio({ servicios: [] }),
+  );
+  assert.equal(r.accionPendiente, undefined);
+  assert.match(r.mensaje, /no tienes servicios/);
+});
+
+test("el prompt separa cambiar precio de crear servicio", () => {
+  const prompt = construirPromptSistema([], "El Retiro", 3.42, -76.52, contextoNegocio(), true);
+  assert.match(prompt, /NUNCA devuelvas tipo "servicio_catalogo" para esto/);
+  assert.match(prompt, /JAMÁS escribas "precio actualizado"/);
+});
+
+test("leerMonto entiende las formas de decir un precio", () => {
+  assert.equal(leerMonto("30 mil"), 30000);
+  assert.equal(leerMonto("30.000"), 30000);
+  assert.equal(leerMonto("a 30"), 30000);
+  assert.equal(leerMonto("$45.000"), 45000);
+  assert.equal(leerMonto("cambiar el precio"), null);
+});
+
+test("responder solo con el monto no pierde el hilo de la conversacion", () => {
+  // El backend recibe el historial con `rol`, no con `emisor`: esa es la
+  // forma que arma el frontend al llamar a /api/ai/chat.
+  const historial = [
+    {
+      rol: "model",
+      texto: '¿A qué valor dejo "Corte de cabello"? Ahora está en $ 18.000.',
+    },
+  ];
+  const r = motorRespaldoLocal(
+    "$40.000",
+    null,
+    [],
+    historial,
+    contextoNegocio({ servicios: CATALOGO }),
+  );
+  assert.equal(r.accionPendiente.tipo, "cambiar_precio_servicio");
+  assert.deepEqual(r.accionPendiente.payload, { servicioId: "svc-2", precioNuevo: 40000 });
 });
