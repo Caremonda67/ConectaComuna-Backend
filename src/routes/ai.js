@@ -113,8 +113,36 @@ export function calcularDistanciaMetros(lat1, lon1, lat2, lon2) {
 
 /**
  * Consulta negocios activos en la comuna para nutrir el contexto del asistente.
+ *
+ * Con la ubicación del vecino, el orden lo pone PostGIS. Sin ella —o si algo
+ * falla— se usa el camino de siempre.
+ *
+ * El camino de siempre tiene un fallo que no se ve con pocos negocios: pide
+ * los 50 MÁS RECIENTES y la distancia se calcula después, en JavaScript. O
+ * sea que se ordenan por cercanía 50 negocios elegidos por antigüedad. Si el
+ * cerrajero más cercano es el número 51 por fecha de alta, el asistente no
+ * llega a verlo y recomienda otro con total seguridad. Es el mismo fallo que
+ * `buscar_negocios_cerca` ya corrigió en el directorio.
  */
-async function obtenerNegociosComuna() {
+async function obtenerNegociosComuna(lat = null, lng = null) {
+  if (lat != null && lng != null) {
+    try {
+      const { data, error } = await claveSupabase.rpc("buscar_negocios_cerca", {
+        p_lat: lat,
+        p_lng: lng,
+        p_radio_km: 25,
+        p_limite: 50,
+        p_categoria: null,
+      });
+      // Lista vacía NO es un resultado válido aquí: significa que el vecino
+      // está fuera del radio del piloto, y el asistente necesita igualmente
+      // conocer los negocios para poder explicarle que están en Cali.
+      if (!error && Array.isArray(data) && data.length > 0) return data;
+    } catch (err) {
+      console.warn("Cercanía por PostGIS no disponible, se usa el orden por fecha:", err.message);
+    }
+  }
+
   try {
     const { data, error } = await claveSupabase
       .from("businesses")
@@ -1157,10 +1185,29 @@ export function construirPromptSistema(negocios, barrioUsuario, lat, lng, contex
 - OJO: la lista de pedidos de arriba son solo los ACTIVOS (pendientes, aceptados o en curso). Los trabajos FINALIZADOS no aparecen ahí: están en esta línea. Si pregunta cuántos trabajos, servicios o pedidos ha finalizado, terminado o completado, responde con ese número y NUNCA digas que no tiene ninguno cuando es mayor que cero.`
     : "- El usuario no tiene negocio, así que no hay historial de trabajos que contar.";
 
-  const listaNegocios = negocios
+  // La distancia va en la línea de cada negocio, y hace falta de verdad.
+  // Antes solo viajaba el barrio, y más abajo el prompt ordena decir "cerca
+  // de ti": el modelo no tenía con qué desobedecer, así que presentaba como
+  // cercano un taller a 3,3 km. No mentía, cumplía la instrucción con el
+  // único dato que le dábamos.
+  const conDistancia = negocios.map((n) => ({
+    ...n,
+    metros: calcularDistanciaMetros(lat, lng, n.lat, n.lng),
+  }));
+
+  // Dato pelado, sin adjetivos: el modelo copiaba literal el "a 762 m,
+  // caminando" y la frase salía con la coma en mitad del renglón. La forma de
+  // decirlo la pone la regla de redacción, no esta línea.
+  const comoDeLejos = (m) => {
+    if (m == null) return "distancia desconocida";
+    if (m < 1000) return `a ${m} m`;
+    return `a ${(m / 1000).toFixed(1)} km (no es cerca)`;
+  };
+
+  const listaNegocios = conDistancia
     .map(
       (n) =>
-        `- [ID: ${n.id}] ${n.name} | Cat: ${n.category} | Barrio: ${n.neighborhood} | Wsp: ${n.whatsapp || "No"} | Verificado: ${n.verification_status === "verified" ? "Sí" : "No"}`
+        `- [ID: ${n.id}] ${n.name} | Cat: ${n.category} | Barrio: ${n.neighborhood} | ${comoDeLejos(n.metros)} | Wsp: ${n.whatsapp || "No"} | Verificado: ${n.verification_status === "verified" ? "Sí" : "No"}`
     )
     .join("\n");
 
@@ -1171,7 +1218,13 @@ No conoces el género de quien escribe, así que nunca lo supongas: di "vecino" 
 INFORMACIÓN DE UBICACIÓN DEL USUARIO:
 ${tieneUbicacionExplicita
   ? `- Ubicación activa del usuario: ${descUbi.enBarrio} (Coordenadas aprox: ${lat}, ${lng}).
-- REGLA DE REDACCIÓN: Di siempre "${descUbi.cercaDe}" o "${descUbi.enBarrio}". Puedes indicar distancias relativas aproximadas.`
+- REGLA DE REDACCIÓN: Di siempre "${descUbi.cercaDe}" o "${descUbi.enBarrio}" para referirte a DÓNDE ESTÁ LA PERSONA.
+- REGLA DE DISTANCIAS, y es estricta: cada negocio de la lista trae la suya ya calculada. Úsala tal cual.
+  • Por debajo de 1 km puedes decir "cerca", "a la vuelta" o "aquí mismo".
+  • A partir de 1 km tienes PROHIBIDO decir "cerca de ti", "aquí cerquita" o parecidos. Di los kilómetros: "está en Villa del Lago, a 3,3 km de donde estás".
+  • Nunca te inventes una distancia ni la deduzcas del nombre del barrio. Si la línea dice "distancia desconocida", no hables de distancias.
+  • No expliques esta regla ni la menciones. Nada de "como queda a más de un kilómetro, no puedo decir que está cerca": simplemente da la distancia y sigue.
+  Decirle a alguien que un taller está cerca cuando hay media hora a pie es lo que hace que el vecino no vuelva a creerle a la plataforma.`
   : `- Ubicación activa del usuario: NO DEFINIDA (el usuario aún no ha indicado su barrio ni activado GPS).
 - REGLA ESTRICTA DE UBICACIÓN NO DEFINIDA:
   1. JAMÁS asumas por defecto que el usuario está en Antonio Nariño ni en ningún barrio específico.
@@ -1394,8 +1447,8 @@ ruta.post("/chat", envolver(async (req, res) => {
   const lat = tieneUbicacionExplicita && ubicacion.lat ? Number(ubicacion.lat) : null;
   const lng = tieneUbicacionExplicita && ubicacion.lng ? Number(ubicacion.lng) : null;
 
-  // Consultar negocios reales
-  const negocios = await obtenerNegociosComuna();
+  // Consultar negocios reales. Con ubicación, ordenados por cercanía real.
+  const negocios = await obtenerNegociosComuna(lat, lng);
 
   const apiKey = process.env.GEMINI_API_KEY;
   const textoLimpio = mensaje.toLowerCase().trim();
